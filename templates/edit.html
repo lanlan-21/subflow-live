@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>聽打工作台 - 房間 {{ room_id }}</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      background: #0a0a0a;
+      font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif;
+      overflow: hidden;
+    }
+    
+    .toolbar {
+      display: flex;
+      gap: 10px;
+      padding: 8px 16px;
+      background: #1e1e1e;
+      border-bottom: 1px solid #333;
+      align-items: center;
+      flex-wrap: wrap;
+      transition: transform 0.25s ease, margin-top 0.25s ease, opacity 0.2s ease;
+      z-index: 100;
+    }
+
+    #topHoverTrigger {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 12px;
+      z-index: 150;
+    }
+    body.toolbar-hidden #topHoverTrigger { display: block; }
+    
+    body.toolbar-hidden .toolbar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      transform: translateY(-100%);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.7);
+    }
+    body.toolbar-hidden .toolbar:hover,
+    body.toolbar-hidden #topHoverTrigger:hover + .toolbar {
+      transform: translateY(0);
+    }
+
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 14px;
+      color: #e2e8f0;
+    }
+    select, input[type="number"], input[type="color"] {
+      padding: 5px 8px;
+      border: 1px solid #555;
+      border-radius: 4px;
+      background: #2a2a2a;
+      color: #fff;
+      font-size: 14px;
+      outline: none;
+    }
+    .size-input { width: 60px; text-align: center; }
+    .btn-step {
+      padding: 5px 10px;
+      border: 1px solid #555;
+      background: #333;
+      color: #fff;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    .btn-step:hover { background: #444; }
+
+    .btn {
+      padding: 6px 14px;
+      border: 1px solid #555;
+      background: #2a2a2a;
+      color: #fff;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn:hover { background: #3a3a3a; }
+    .btn-blue { background: #2563eb; color: #fff; border: none; }
+    .btn-blue:hover { background: #1d4ed8; }
+    .btn-green { background: #16a34a; color: #fff; border: none; }
+    .btn-green:hover { background: #15803d; }
+    .btn-export { background: #d97706; color: #fff; border: none; }
+    .btn-export:hover { background: #b45309; }
+    .btn-dark { background: #334155; color: #fff; border: none; }
+    .btn-dark:hover { background: #475569; }
+
+    .btn-ai {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      transition: all 0.2s ease;
+    }
+    .btn-ai:hover { background: #0369a1; }
+    .btn-ai.recording {
+      background: #dc2626 !important;
+      box-shadow: 0 0 10px rgba(220, 38, 38, 0.6);
+    }
+
+    /* 麥克風音訊監控模組 */
+    .mic-control-box {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #27272a;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid #444;
+    }
+    .vu-meter-bar {
+      width: 75px;
+      height: 10px;
+      background: #18181b;
+      border-radius: 5px;
+      overflow: hidden;
+      border: 1px solid #52525b;
+      position: relative;
+    }
+    #vuFill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%);
+      transition: width 0.04s ease-out;
+    }
+
+    .sync-switch-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      background: #27272a;
+      padding: 5px 10px;
+      border-radius: 6px;
+      border: 1px solid #444;
+      font-size: 13px;
+      user-select: none;
+    }
+    .sync-switch-label input { cursor: pointer; }
+    
+    .editor-wrapper {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 16px;
+      background: #0a0a0a;
+      position: relative;
+      transition: padding 0.2s;
+    }
+    
+    #editor {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 20px;
+      outline: none;
+      resize: none;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
+      font-size: 36px;
+      line-height: 1.0;
+      color: #ffff33;
+      background: #121212;
+      caret-color: #ffff33;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    #aiStreamBar {
+      display: none;
+      padding: 6px 14px;
+      background: #18181b;
+      border-top: 1px solid #27272a;
+      color: #a1a1aa;
+      font-size: 14px;
+      align-items: center;
+      gap: 8px;
+    }
+    #aiStreamBar.active { display: flex; }
+    .ai-indicator {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      display: inline-block;
+      animation: blink 1s infinite;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    #aiInterimText { color: #38bdf8; font-style: italic; }
+
+    #floatingActionGroup {
+      display: none;
+      position: absolute;
+      top: 24px;
+      right: 28px;
+      z-index: 90;
+      gap: 8px;
+      opacity: 0.35;
+      transition: opacity 0.2s;
+    }
+    body.toolbar-hidden:not(.is-fullscreen) #floatingActionGroup { display: flex; }
+    #floatingActionGroup:hover { opacity: 1; }
+
+    body.is-fullscreen .toolbar,
+    body.is-fullscreen .statusbar,
+    body.is-fullscreen #floatingActionGroup,
+    body.is-fullscreen #topHoverTrigger { display: none !important; }
+    body.is-fullscreen .editor-wrapper { padding: 0 !important; }
+    body.is-fullscreen #editor {
+      border: none !important;
+      border-radius: 0 !important;
+      padding: 36px !important;
+    }
+    body.is-fullscreen #exitFsBtn { display: inline-flex !important; }
+
+    #exitFsBtn {
+      display: none;
+      position: absolute;
+      bottom: 24px;
+      right: 24px;
+      z-index: 999;
+      opacity: 0.25;
+      transition: opacity 0.2s;
+    }
+    #exitFsBtn:hover { opacity: 0.9; }
+
+    .statusbar {
+      padding: 8px 16px;
+      background: #1e1e1e;
+      border-top: 1px solid #333;
+      font-size: 13px;
+      color: #94a3b8;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .export-dropdown { position: relative; display: inline-block; }
+    .export-menu {
+      display: none;
+      position: absolute;
+      right: 0;
+      top: 100%;
+      margin-top: 4px;
+      background-color: #1e1e1e;
+      border: 1px solid #444;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      z-index: 1000;
+      min-width: 180px;
+    }
+    .export-menu button {
+      width: 100%;
+      padding: 10px 14px;
+      background: none;
+      border: none;
+      color: #f1f5f9;
+      text-align: left;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .export-menu button:hover { background-color: #2a2a2a; color: #38bdf8; }
+    .show-menu { display: block; }
+  </style>
+</head>
+<body>
+
+  <div id="topHoverTrigger"></div>
+
+  <div class="toolbar" id="mainToolbar">
+    <button class="btn btn-ai" id="aiToggleBtn" onclick="toggleAISpeech()">
+      🎙️ 啟動 AI 語音辨識
+    </button>
+
+    <!-- 音訊來源選單與音量監聽 -->
+    <div class="mic-control-box">
+      <select id="audioSourceSelect" style="max-width: 150px;" onchange="onAudioSourceChange()" title="切換收音裝置">
+        <option value="">預設麥克風</option>
+      </select>
+      <div class="vu-meter-bar" title="目前音量">
+        <div id="vuFill"></div>
+      </div>
+      <span id="vuLevelText" style="font-size: 11px; color: #71717a; width: 30px;">0%</span>
+    </div>
+
+    <!-- 字體 -->
+    <div class="control-group">
+      <label for="fontFamily">字體：</label>
+      <select id="fontFamily" onchange="applyAndSync()">
+        <option value='"DFKai-SB", "BiauKai", "標楷體", serif' selected>標楷體</option>
+        <option value='"Microsoft JhengHei", "微軟正黑體", sans-serif'>微軟正黑體</option>
+        <option value='"PingFang TC", "黑體-繁", sans-serif'>蘋方 / 黑體</option>
+        <option value='"PMingLiU", "新細明體", serif'>新細明體</option>
+      </select>
+    </div>
+
+    <!-- 字號 -->
+    <div class="control-group">
+      <label for="fontSizeInput">字號：</label>
+      <input type="number" id="fontSizeInput" class="size-input" value="36" min="12" max="140" step="2" onchange="applyAndSync()">
+      <button class="btn-step" onclick="stepSize(2)">A⁺</button>
+      <button class="btn-step" onclick="stepSize(-2)">A⁻</button>
+    </div>
+
+    <!-- 行距 -->
+    <div class="control-group">
+      <label for="lineHeight">行距：</label>
+      <select id="lineHeight" onchange="applyAndSync()">
+        <option value="0.8">超緊湊 (0.8)</option>
+        <option value="0.9">極致緊湊 (0.9)</option>
+        <option value="1.0" selected>單倍行高 (1.0)</option>
+        <option value="1.2">微寬 (1.2)</option>
+        <option value="1.4">適中 (1.4)</option>
+      </select>
+    </div>
+
+    <!-- 字色 -->
+    <div class="control-group">
+      <label for="textColor">字色：</label>
+      <input type="color" id="textColor" value="#ffff33" onchange="applyAndSync()">
+    </div>
+
+    <!-- 主題 -->
+    <div class="control-group">
+      <label for="editorTheme">主題：</label>
+      <select id="editorTheme" onchange="switchTheme()">
+        <option value="high-contrast" selected>黑底黃字</option>
+        <option value="dark">護眼深黑</option>
+        <option value="light">亮白模式</option>
+      </select>
+    </div>
+
+    <!-- 樣式廣播開關 -->
+    <label class="sync-switch-label" title="若勾選，這台調整比例時觀眾端跟著變；若取消，僅個人獨立視角">
+      <input type="checkbox" id="syncStyleCheckbox" checked onchange="handleSyncSwitch()">
+      <span id="syncStatusText" style="color: #4ade80;">📡 投影主控</span>
+    </label>
+
+    <button class="btn btn-dark" onclick="toggleToolbar(false)">▲ 收起工具列</button>
+    <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
+
+    <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
+      <div class="export-dropdown">
+        <button class="btn btn-export" onclick="toggleExportMenu()">📥 匯出逐字稿 ▼</button>
+        <div class="export-menu" id="exportMenu">
+          <button onclick="exportTxt(false)">📄 純文字檔 (.txt)</button>
+          <button onclick="exportDoc()">📝 Word 文件 (.doc)</button>
+          <button onclick="exportTxt(true)">⏱️ 附時間統計 (.txt)</button>
+        </div>
+      </div>
+
+      <button class="btn btn-blue" onclick="copyLink()">📋 複製共筆連結</button>
+      <button class="btn btn-green" onclick="openCleanView()">🖥️ 投影純淨觀眾端</button>
+    </div>
+  </div>
+
+  <div class="editor-wrapper">
+    <div id="floatingActionGroup">
+      <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
+      <button class="btn btn-dark" onclick="toggleToolbar(true)">⚙ 展開工具列</button>
+    </div>
+
+    <textarea id="editor" placeholder="在此打字... 啟動 AI 語音後文字會自動湧入，您可隨意修正任何錯字而不受打擾"></textarea>
+    <button class="btn" id="exitFsBtn" onclick="toggleFullscreen()">✕ 退出全螢幕 (ESC)</button>
+  </div>
+
+  <div id="aiStreamBar">
+    <span class="ai-indicator"></span>
+    <span id="aiStatusTitle">AI 聆聽中：</span>
+    <span id="aiInterimText">等待說話聲音...</span>
+  </div>
+
+  <div class="statusbar">
+    <div>房間：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
+    <div>聽打員工作台（可自由選擇輸入音源：麥克風 / 介面 / 混音）</div>
+  </div>
+
+  <script>
+    const socket = io();
+    const roomId = "{{ room_id }}";
+    const editor = document.getElementById('editor');
+    const wordCount = document.getElementById('wordCount');
+    const syncCheckbox = document.getElementById('syncStyleCheckbox');
+    const syncStatusText = document.getElementById('syncStatusText');
+    const aiToggleBtn = document.getElementById('aiToggleBtn');
+    const aiStreamBar = document.getElementById('aiStreamBar');
+    const aiInterimText = document.getElementById('aiInterimText');
+    const vuFill = document.getElementById('vuFill');
+    const vuLevelText = document.getElementById('vuLevelText');
+    const audioSourceSelect = document.getElementById('audioSourceSelect');
+    let currentBg = "#121212";
+
+    socket.emit('join', { room: roomId });
+
+    socket.on('sync_text', data => {
+      if (!data) return;
+
+      if (data.text !== undefined && editor.value !== data.text) {
+        const start = editor.selectionStart;
+        const end = editor.selectionEnd;
+        editor.value = data.text;
+        editor.setSelectionRange(start, end);
+        updateWordCount();
+      }
+
+      if (syncCheckbox.checked && data.sync_style) {
+        if (data.font) document.getElementById('fontFamily').value = data.font;
+        if (data.size) document.getElementById('fontSizeInput').value = data.size;
+        if (data.line) document.getElementById('lineHeight').value = data.line;
+        if (data.color) document.getElementById('textColor').value = data.color;
+        if (data.bg) currentBg = data.bg;
+        applyLocalStyle();
+      }
+    });
+
+    editor.addEventListener('input', () => {
+      sendSyncData();
+      updateWordCount();
+    });
+
+    function getPayload() {
+      return {
+        room: roomId,
+        text: editor.value,
+        sync_style: syncCheckbox.checked,
+        font: document.getElementById('fontFamily').value,
+        size: parseInt(document.getElementById('fontSizeInput').value, 10) || 36,
+        line: document.getElementById('lineHeight').value,
+        color: document.getElementById('textColor').value,
+        bg: currentBg
+      };
+    }
+
+    function sendSyncData() {
+      socket.emit('update_text', getPayload());
+    }
+
+    function applyLocalStyle() {
+      editor.style.fontFamily = document.getElementById('fontFamily').value;
+      editor.style.fontSize = document.getElementById('fontSizeInput').value + 'px';
+      editor.style.lineHeight = document.getElementById('lineHeight').value;
+      editor.style.color = document.getElementById('textColor').value;
+      editor.style.caretColor = document.getElementById('textColor').value;
+      editor.style.backgroundColor = currentBg;
+    }
+
+    function applyAndSync() {
+      applyLocalStyle();
+      sendSyncData();
+    }
+
+    function handleSyncSwitch() {
+      if (syncCheckbox.checked) {
+        syncStatusText.innerText = "📡 投影主控";
+        syncStatusText.style.color = "#4ade80";
+        sendSyncData();
+      } else {
+        syncStatusText.innerText = "🔒 個人校對";
+        syncStatusText.style.color = "#fbbf24";
+      }
+    }
+
+    function stepSize(delta) {
+      const input = document.getElementById('fontSizeInput');
+      let val = (parseInt(input.value, 10) || 36) + delta;
+      input.value = Math.min(Math.max(val, 12), 140);
+      applyAndSync();
+    }
+
+    function switchTheme() {
+      const theme = document.getElementById('editorTheme').value;
+      const colorInput = document.getElementById('textColor');
+      if (theme === 'high-contrast') {
+        currentBg = '#121212';
+        colorInput.value = '#ffff33';
+      } else if (theme === 'dark') {
+        currentBg = '#1e1e1e';
+        colorInput.value = '#ffffff';
+      } else {
+        currentBg = '#ffffff';
+        colorInput.value = '#1e293b';
+      }
+      applyAndSync();
+    }
+
+    function updateWordCount() {
+      const cleanText = editor.value.replace(/\s/g, '');
+      wordCount.innerText = cleanText.length;
+    }
+
+    /* ============================================================
+       音訊裝置枚舉與多來源選擇監聽
+       ============================================================ */
+    let recognition = null;
+    let isAIRunning = false;
+    let audioContext = null;
+    let mediaStream = null;
+    let animFrameId = null;
+
+    // 取得所有音訊輸入裝置列表
+    async function updateAudioDeviceList() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devices.filter(d => d.kind === 'audioinput');
+        
+        const currentSelected = audioSourceSelect.value;
+        audioSourceSelect.innerHTML = '';
+
+        audioInputs.forEach((device, index) => {
+          const option = document.createElement('option');
+          option.value = device.deviceId;
+          option.text = device.label || `音訊裝置 ${index + 1}`;
+          audioSourceSelect.appendChild(option);
+        });
+
+        if (currentSelected) {
+          audioSourceSelect.value = currentSelected;
+        }
+      } catch (err) {
+        console.warn("無法取得音訊裝置列表：", err);
+      }
+    }
+
+    async function onAudioSourceChange() {
+      if (isAIRunning) {
+        // 若正在收音中切換了裝置，立刻平滑重啟
+        stopAudioMeter();
+        await startAudioMeter();
+      }
+    }
+
+    async function startAudioMeter() {
+      try {
+        const deviceId = audioSourceSelect.value;
+        const audioConstraints = {
+          autoGainControl: true,
+          echoCancellation: false,
+          noiseSuppression: false
+        };
+
+        if (deviceId) {
+          audioConstraints.deviceId = { exact: deviceId };
+        }
+
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: audioConstraints,
+          video: false
+        });
+
+        // 重新更新一次設備名稱（此時已授權，能讀到具體型號如 Audient / Realtek）
+        updateAudioDeviceList();
+
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(mediaStream);
+
+        // 前級數位放大節點（放大 6 倍，確保微弱聲音也能清晰感應）
+        const preampGain = audioContext.createGain();
+        preampGain.gain.value = 6.0;
+
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.2;
+
+        source.connect(preampGain);
+        preampGain.connect(analyser);
+
+        const timeData = new Float32Array(analyser.fftSize);
+
+        function updateMeter() {
+          if (!isAIRunning) return;
+          analyser.getFloatTimeDomainData(timeData);
+
+          let sumSquares = 0;
+          for (let i = 0; i < timeData.length; i++) {
+            sumSquares += timeData[i] * timeData[i];
+          }
+          const rms = Math.sqrt(sumSquares / timeData.length);
+
+          let percent = Math.min(Math.round(rms * 180), 100);
+
+          vuFill.style.width = percent + '%';
+          if (percent > 2) {
+            vuLevelText.innerText = percent + '%';
+            vuLevelText.style.color = percent > 85 ? '#ef4444' : '#4ade80';
+          } else {
+            vuLevelText.innerText = '0%';
+            vuLevelText.style.color = '#71717a';
+          }
+
+          animFrameId = requestAnimationFrame(updateMeter);
+        }
+        updateMeter();
+        return true;
+      } catch (err) {
+        console.error("收音通道開啟失敗：", err);
+        alert("無法讀取選定的音訊裝置！請確認裝置未被其他專用軟體獨佔。");
+        return false;
+      }
+    }
+
+    function stopAudioMeter() {
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+      }
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+      vuFill.style.width = '0%';
+      vuLevelText.innerText = '0%';
+      vuLevelText.style.color = '#71717a';
+    }
+
+    function initSpeechEngine() {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        alert('您的瀏覽器不支援原生語音辨識，請務必使用 Google Chrome 瀏覽器！');
+        return null;
+      }
+
+      const rec = new SpeechRecognition();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = 'zh-TW';
+
+      rec.onresult = (event) => {
+        let interimTranscript = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const item = event.results[i];
+          const transcript = item[0].transcript;
+
+          if (item.isFinal) {
+            appendAITextSafely(transcript);
+            aiInterimText.innerText = '【完成入稿】' + transcript;
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+
+        if (interimTranscript) {
+          aiInterimText.innerText = interimTranscript;
+        }
+      };
+
+      rec.onend = () => {
+        if (isAIRunning) {
+          try { rec.start(); } catch (e) {}
+        }
+      };
+
+      rec.onerror = (event) => {
+        if (event.error === 'no-speech') return;
+        if (event.error === 'not-allowed') {
+          alert('麥克風權限被阻擋，請在網址列左側點擊鎖頭允許！');
+          stopAI();
+        }
+      };
+
+      return rec;
+    }
+
+    function appendAITextSafely(newSentence) {
+      const currentVal = editor.value;
+      const start = editor.selectionStart;
+      const end = editor.selectionEnd;
+
+      let appendText = newSentence.trim();
+      if (!appendText) return;
+
+      if (currentVal.length > 0 && !currentVal.endsWith('\n')) {
+        appendText = '\n' + appendText;
+      }
+
+      editor.value = currentVal + appendText;
+      editor.setSelectionRange(start, end);
+
+      sendSyncData();
+      updateWordCount();
+    }
+
+    async function toggleAISpeech() {
+      if (!isAIRunning) {
+        await startAI();
+      } else {
+        stopAI();
+      }
+    }
+
+    async function startAI() {
+      isAIRunning = true;
+      const micOk = await startAudioMeter();
+      if (!micOk) {
+        isAIRunning = false;
+        return;
+      }
+
+      if (!recognition) {
+        recognition = initSpeechEngine();
+      }
+      if (!recognition) {
+        isAIRunning = false;
+        stopAudioMeter();
+        return;
+      }
+
+      try {
+        recognition.start();
+        aiToggleBtn.classList.add('recording');
+        aiToggleBtn.innerText = '⏹️ 停止語音收音';
+        aiStreamBar.classList.add('active');
+        aiInterimText.innerText = '收音中，請說話...';
+      } catch (err) {
+        console.warn("辨識引擎已在運行中：", err);
+      }
+    }
+
+    function stopAI() {
+      isAIRunning = false;
+      stopAudioMeter();
+      if (recognition) {
+        try { recognition.stop(); } catch (e) {}
+      }
+      aiToggleBtn.classList.remove('recording');
+      aiToggleBtn.innerText = '🎙️ 啟動 AI 語音辨識';
+      aiStreamBar.classList.remove('active');
+    }
+
+    /* ====== 視圖控制 ====== */
+    function toggleToolbar(show) {
+      if (show) {
+        document.body.classList.remove('toolbar-hidden');
+      } else {
+        document.body.classList.add('toolbar-hidden');
+      }
+    }
+
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+          alert('無法進入全螢幕：' + err.message);
+        });
+      } else {
+        if (document.exitFullscreen) document.exitFullscreen();
+      }
+    }
+
+    document.addEventListener('fullscreenchange', () => {
+      if (document.fullscreenElement) {
+        document.body.classList.add('is-fullscreen');
+      } else {
+        document.body.classList.remove('is-fullscreen');
+      }
+    });
+
+    function openCleanView() {
+      window.open('/view/' + roomId, 'AudienceView_' + roomId, 'width=1000,height=700,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes');
+    }
+
+    function copyLink() {
+      navigator.clipboard.writeText(window.location.href).then(() => {
+        alert('已複製共筆連結！直接貼給夥伴即可一起打字。');
+      }).catch(() => {
+        prompt('請手動複製此連結：', window.location.href);
+      });
+    }
+
+    /* ====== 匯出模組 ====== */
+    function toggleExportMenu() {
+      document.getElementById('exportMenu').classList.toggle('show-menu');
+    }
+
+    window.addEventListener('click', (e) => {
+      if (!e.target.matches('.btn-export')) {
+        const menu = document.getElementById('exportMenu');
+        if (menu && menu.classList.contains('show-menu')) {
+          menu.classList.remove('show-menu');
+        }
+      }
+    });
+
+    function getFileTimestamp() {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = String(now.getMonth() + 1).padStart(2, '0');
+      const d = String(now.getDate()).padStart(2, '0');
+      const h = String(now.getHours()).padStart(2, '0');
+      const min = String(now.getMinutes()).padStart(2, '0');
+      return `${y}-${m}-${d}_${h}${min}`;
+    }
+
+    function downloadBlob(blob, filename) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    }
+
+    function exportTxt(withHeader = false) {
+      const text = editor.value;
+      if (!text.trim()) {
+        alert('目前尚無內容可供匯出！');
+        return;
+      }
+      let content = text;
+      if (withHeader) {
+        const nowStr = new Date().toLocaleString('zh-TW');
+        const count = editor.value.replace(/\s/g, '').length;
+        content = `【即時聽打逐字記錄】\n房間代碼：${roomId}\n匯出時間：${nowStr}\n總字數：${count} 字\n----------------------------------------\n\n` + text;
+      }
+      const blob = new Blob(["\uFEFF" + content], { type: 'text/plain;charset=utf-8' });
+      downloadBlob(blob, `${getFileTimestamp()}_逐字稿.txt`);
+    }
+
+    function exportDoc() {
+      const text = editor.value;
+      if (!text.trim()) {
+        alert('目前尚無內容可供匯出！');
+        return;
+      }
+      const formattedHtml = text.split('\n').map(p => `<p style="margin: 0 0 8px 0; line-height: 1.3;">${p || '&nbsp;'}</p>`).join('');
+      const wordHtml = `
+        <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+        <head>
+          <meta charset='utf-8'>
+          <title>聽打逐字稿</title>
+          <style>
+            body { font-family: "標楷體", "DFKai-SB", serif; font-size: 14pt; line-height: 1.3; color: #000000; }
+          </style>
+        </head>
+        <body>${formattedHtml}</body>
+        </html>
+      `;
+      const blob = new Blob(["\uFEFF" + wordHtml], { type: 'application/msword;charset=utf-8' });
+      downloadBlob(blob, `${getFileTimestamp()}_逐字稿.doc`);
+    }
+
+    // 初始化讀取一次設備
+    navigator.mediaDevices.enumerateDevices().then(updateAudioDeviceList).catch(() => {});
+
+    applyLocalStyle();
+    updateWordCount();
+  </script>
+</body>
+</html>

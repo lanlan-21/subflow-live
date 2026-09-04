@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <title>即時字幕投影</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      background-color: #121212;
+      color: #ffff33;
+      overflow-x: hidden;
+      overflow-y: auto;
+      cursor: pointer;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    
+    #tip {
+      position: fixed;
+      top: 12px;
+      right: 16px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #aaa;
+      font-size: 13px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      pointer-events: none;
+      font-family: sans-serif;
+      transition: opacity 0.5s;
+    }
+
+    #content {
+      padding: 36px;
+      word-break: break-all;
+      white-space: pre-wrap;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
+      font-size: 36px;
+      line-height: 1.0;
+      width: 100%;
+      min-height: 100vh;
+    }
+  </style>
+</head>
+<body onclick="toggleTrueFullscreen()">
+  <div id="tip">💡 點擊畫面任意處：進入 / 退出全螢幕投影</div>
+  <div id="content"></div>
+
+  <script>
+    const socket = io();
+    const roomId = "{{ room_id }}";
+    const content = document.getElementById('content');
+    const tip = document.getElementById('tip');
+
+    socket.emit('join', { room: roomId });
+
+    socket.on('sync_text', data => {
+      if (!data) return;
+
+      // 1. 文字必定即時更新
+      if (data.text !== undefined) {
+        content.innerText = data.text;
+      }
+
+      // 2. 只有在發送端是主控廣播（sync_style 為 true 或初始載入）時，才改變投影畫面比例
+      if (data.sync_style !== false) {
+        if (data.font) content.style.fontFamily = data.font;
+        if (data.size) content.style.fontSize = data.size + 'px';
+        if (data.line) content.style.lineHeight = data.line;
+        if (data.color) content.style.color = data.color;
+        if (data.bg) document.body.style.backgroundColor = data.bg;
+      }
+
+      // 3. 平滑置底
+      window.scrollTo(0, document.body.scrollHeight);
+    });
+
+    function toggleTrueFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().then(() => {
+          tip.style.opacity = '0';
+        }).catch(() => {});
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen().then(() => {
+            tip.style.opacity = '1';
+          }).catch(() => {});
+        }
+      }
+    }
+  </script>
+</body>
+</html>
