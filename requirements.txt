@@ -1,6 +1,4 @@
 Flask
 Flask-SocketIO
-gunicorn
-gevent
-gevent-websocket
+simple-websocket
 requests
