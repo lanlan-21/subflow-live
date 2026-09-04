@@ -1,5 +1,5 @@
-Flask==3.0.3
-Flask-SocketIO==5.3.6
-eventlet==0.35.2
-gunicorn==22.0.0
-requests==2.31.0
+Flask
+Flask-SocketIO
+eventlet
+gunicorn
+requests
