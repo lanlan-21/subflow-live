@@ -2,19 +2,384 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <title>聽打字幕系統</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>同步聽打協作平台</title>
   <style>
-    body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #f0f2f5; margin: 0; }
-    .card { background: #fff; padding: 40px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); text-align: center; }
-    .btn { display: inline-block; padding: 12px 24px; background: #2e7d32; color: #fff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 18px; }
+    :root {
+      --primary: #1976d2;
+      --primary-hover: #1565c0;
+      --accent: #e65100;
+      --accent-hover: #ef6c00;
+      --bg: #f4f6f9;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft JhengHei", sans-serif;
+      background: var(--bg);
+      margin: 0;
+      padding: 30px 16px;
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .header h1 {
+      margin: 0 0 8px 0;
+      font-size: 28px;
+      color: #1a202c;
+    }
+    .header p {
+      margin: 0;
+      color: #64748b;
+      font-size: 15px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      width: 100%;
+      max-width: 1200px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      border-top: 5px solid var(--primary);
+    }
+    /* 臨時頻道使用專屬橙色區隔 */
+    .card.card-temp {
+      border-top-color: var(--accent);
+      background: #fffdfa;
+    }
+    .card-title {
+      font-size: 19px;
+      font-weight: 700;
+      margin: 0 0 14px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .badge {
+      font-size: 12px;
+      font-weight: normal;
+      background: #e3f2fd;
+      color: var(--primary);
+      padding: 3px 8px;
+      border-radius: 20px;
+    }
+    .badge.badge-temp {
+      background: #fff3e0;
+      color: var(--accent);
+    }
+    .section-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 10px 0 6px 0;
+    }
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      box-sizing: border-box;
+      width: 100%;
+      transition: background 0.15s ease;
+    }
+    .btn-main {
+      background: var(--primary);
+      color: #fff;
+      margin-bottom: 12px;
+    }
+    .btn-main:hover { background: var(--primary-hover); }
+    .btn-accent {
+      background: var(--accent);
+      color: #fff;
+      margin-bottom: 12px;
+    }
+    .btn-accent:hover { background: var(--accent-hover); }
+    .btn-outline {
+      background: #f8fafc;
+      color: #334155;
+      border: 1px solid #cbd5e1;
+      font-size: 13px;
+      padding: 8px 10px;
+    }
+    .btn-outline:hover { background: #e2e8f0; }
+    .btn-dark {
+      background: #333;
+      color: #fff;
+      font-size: 13px;
+      padding: 8px 10px;
+      margin-top: 6px;
+    }
+    .btn-dark:hover { background: #111; }
+    .btn-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    /* 臨時頻道輸入框群組 */
+    .custom-input-group {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .custom-input {
+      flex: 1;
+      padding: 8px 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 14px;
+      outline: none;
+    }
+    .custom-input:focus {
+      border-color: var(--accent);
+    }
+    .btn-create {
+      background: #2e7d32;
+      color: #fff;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      white-space: nowrap;
+    }
+    .btn-create:hover { background: #1b5e20; }
+
+    /* Modal 彈窗 */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.65);
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+    }
+    .modal-box {
+      background: #fff;
+      padding: 24px;
+      border-radius: 12px;
+      text-align: center;
+      max-width: 320px;
+      width: 90%;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+    }
+    .modal-box h3 { margin: 0 0 8px 0; font-size: 18px; }
+    #qrcode-canvas {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin: 15px auto;
+      width: 180px;
+      height: 180px;
+      background: #fff;
+      padding: 8px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    #qrcode-canvas img { width: 100%; height: 100%; display: block; }
+    .modal-url {
+      font-size: 11px;
+      color: #475569;
+      word-break: break-all;
+      background: #f1f5f9;
+      padding: 8px;
+      border-radius: 6px;
+      margin-bottom: 15px;
+    }
+    .toast {
+      position: fixed;
+      bottom: 25px;
+      background: rgba(0,0,0,0.85);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 30px;
+      font-size: 14px;
+      display: none;
+      z-index: 1000;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>🚀 即時聽打字幕系統</h1>
-    <p>專供聽打員快速輸入與投影即時字幕</p>
-    <br>
-    <a href="/new_room" class="btn">☁️ 建立雲端房間</a>
+
+  <div class="header">
+    <h1>🎙️ 同步聽打協作平台</h1>
   </div>
+
+  <div class="grid">
+    <!-- 頻道 A -->
+    <div class="card">
+      <div class="card-title">
+        <span>📌 頻道 A</span>
+        <span class="badge">常駐頻道</span>
+      </div>
+      <div class="section-label">聽打員操作</div>
+      <a href="/edit/A" class="btn btn-main">進入聽打後台 (編輯)</a>
+      <div class="section-label">現場觀眾 & 投影</div>
+      <div class="btn-group">
+        <button class="btn btn-outline" onclick="copyViewUrl('A')">🔗 複製連結</button>
+        <button class="btn btn-outline" onclick="showQrModal('A')">📱 觀眾 QR</button>
+      </div>
+      <a href="/display/A" target="_blank" class="btn btn-dark">🖥️ 投影大螢幕模式</a>
+    </div>
+
+    <!-- 頻道 B -->
+    <div class="card">
+      <div class="card-title">
+        <span>📌 頻道 B</span>
+        <span class="badge">常駐頻道</span>
+      </div>
+      <div class="section-label">聽打員操作</div>
+      <a href="/edit/B" class="btn btn-main">進入聽打後台 (編輯)</a>
+      <div class="section-label">現場觀眾 & 投影</div>
+      <div class="btn-group">
+        <button class="btn btn-outline" onclick="copyViewUrl('B')">🔗 複製連結</button>
+        <button class="btn btn-outline" onclick="showQrModal('B')">📱 觀眾 QR</button>
+      </div>
+      <a href="/display/B" target="_blank" class="btn btn-dark">🖥️ 投影大螢幕模式</a>
+    </div>
+
+    <!-- 頻道 C -->
+    <div class="card">
+      <div class="card-title">
+        <span>📌 頻道 C</span>
+        <span class="badge">常駐頻道</span>
+      </div>
+      <div class="section-label">聽打員操作</div>
+      <a href="/edit/C" class="btn btn-main">進入聽打後台 (編輯)</a>
+      <div class="section-label">現場觀眾 & 投影</div>
+      <div class="btn-group">
+        <button class="btn btn-outline" onclick="copyViewUrl('C')">🔗 複製連結</button>
+        <button class="btn btn-outline" onclick="showQrModal('C')">📱 觀眾 QR</button>
+      </div>
+      <a href="/display/C" target="_blank" class="btn btn-dark">🖥️ 投影大螢幕模式</a>
+    </div>
+
+    <!-- ⚡ 臨時加開頻道卡片 -->
+    <div class="card card-temp">
+      <div class="card-title">
+        <span>⚡ 臨時加開頻道</span>
+        <span class="badge badge-temp">隨時可用</span>
+      </div>
+      
+      <div class="section-label">自訂房號（如 D、VIP、Room2）</div>
+      <div class="custom-input-group">
+        <input type="text" id="customRoomInput" class="custom-input" placeholder="輸入名稱 (如: D)" maxlength="16">
+        <button class="btn-create" onclick="goToCustomRoom()">進入</button>
+      </div>
+
+      <div class="section-label">或快速隨機建立</div>
+      <a href="/new_room" class="btn btn-accent">🎲 一鍵開隨機房間</a>
+
+      <div class="section-label">自訂房觀眾 & 投影小工具</div>
+      <div class="btn-group">
+        <button class="btn btn-outline" onclick="copyCustomViewUrl()">🔗 複製連結</button>
+        <button class="btn btn-outline" onclick="showCustomQrModal()">📱 產生 QR</button>
+      </div>
+      <button class="btn btn-dark" onclick="openCustomDisplay()">🖥️ 投影大螢幕模式</button>
+    </div>
+  </div>
+
+  <!-- QR Code 彈窗 Modal -->
+  <div id="qrModal" class="modal-overlay" onclick="closeQrModal(event)">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <h3 id="modalTitle">觀眾掃碼看版</h3>
+      <p style="font-size:12px; color:#64748b; margin:0;">手機相機掃描即可同步看字</p>
+      
+      <div id="qrcode-canvas">
+        <img id="qrImage" src="" alt="QR Code" />
+      </div>
+      
+      <div id="modalUrl" class="modal-url"></div>
+      <button class="btn btn-outline" onclick="closeQrModal()">關閉視窗</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast">已複製觀眾連結至剪貼簿！</div>
+
+  <script>
+    function getViewUrl(roomId) {
+      return window.location.origin + '/view/' + roomId;
+    }
+
+    function copyViewUrl(roomId) {
+      const url = getViewUrl(roomId);
+      navigator.clipboard.writeText(url).then(() => {
+        showToast('已複製【頻道 ' + roomId + '】觀眾連結！');
+      }).catch(() => {
+        alert('請手動複製連結：\n' + url);
+      });
+    }
+
+    function showQrModal(roomId) {
+      const url = getViewUrl(roomId);
+      document.getElementById('modalTitle').innerText = '【頻道 ' + roomId + '】觀眾 QR Code';
+      document.getElementById('modalUrl').innerText = url;
+
+      const qrImg = document.getElementById('qrImage');
+      qrImg.src = 'https://quickchart.io/qr?size=180&text=' + encodeURIComponent(url);
+
+      document.getElementById('qrModal').style.display = 'flex';
+    }
+
+    /* 臨時頻道專用互動邏輯 */
+    function getCustomRoomName() {
+      const val = document.getElementById('customRoomInput').value.trim();
+      return val ? val : 'D'; // 若空白預設開頻道 D
+    }
+
+    function goToCustomRoom() {
+      const room = getCustomRoomName();
+      window.location.href = '/edit/' + encodeURIComponent(room);
+    }
+
+    function copyCustomViewUrl() {
+      const room = getCustomRoomName();
+      copyViewUrl(room);
+    }
+
+    function showCustomQrModal() {
+      const room = getCustomRoomName();
+      showQrModal(room);
+    }
+
+    function openCustomDisplay() {
+      const room = getCustomRoomName();
+      window.open('/display/' + encodeURIComponent(room), '_blank');
+    }
+
+    function closeQrModal(e) {
+      document.getElementById('qrModal').style.display = 'none';
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.style.display = 'block';
+      setTimeout(() => {
+        toast.style.display = 'none';
+      }, 2000);
+    }
+  </script>
 </body>
 </html>

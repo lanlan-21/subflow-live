@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>即時字幕投影看板 - 頻道 {{ room_id }}</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #121212;
+      color: #ffff33;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
+      height: 100vh;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 12px 8px 60px 8px;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    body::-webkit-scrollbar {
+      display: none;
+    }
+
+    #captionDisplay {
+      font-size: 54px;
+      line-height: 1.1;
+      white-space: pre-wrap;
+      word-break: break-all;
+      letter-spacing: 0px;
+      text-align: justify;
+    }
+
+    /* 右上角感應熱區 */
+    .top-hover-sensor {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 220px;
+      height: 80px;
+      z-index: 1000;
+    }
+
+    /* 平常完全隱形的浮動資訊卡 */
+    .channel-info-card {
+      position: fixed;
+      top: 16px;
+      right: 20px;
+      background: rgba(20, 20, 20, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      color: #cbd5e1;
+      opacity: 0; /* 平時徹底隱形 */
+      pointer-events: none;
+      transition: opacity 0.25s ease, transform 0.25s ease;
+      transform: translateY(-8px);
+      z-index: 999;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+    }
+
+    .top-hover-sensor:hover + .channel-info-card,
+    .channel-info-card:hover {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+    }
+
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      margin-right: 6px;
+    }
+
+    .info-url {
+      font-size: 11px;
+      color: #94a3b8;
+      margin-top: 3px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 右上角滑鼠感應區 -->
+  <div class="top-hover-sensor"></div>
+
+  <!-- 懸停時才顯現的頻道與網址資訊 -->
+  <div class="channel-info-card">
+    <div><span class="status-dot" id="statusDot"></span><strong>頻道 {{ room_id }} 投影看板</strong></div>
+    <div class="info-url" id="currentUrl"></div>
+  </div>
+
+  <div id="captionDisplay">連線中，等待聽打員入稿...</div>
+
+  <script>
+    const socket = io();
+    const roomId = "{{ room_id }}";
+    const displayBox = document.getElementById('captionDisplay');
+    const statusDot = document.getElementById('statusDot');
+    
+    // 自動帶入目前實際瀏覽的完整網址
+    document.getElementById('currentUrl').innerText = window.location.href;
+
+    socket.emit('join', { room: roomId });
+
+    socket.on('connect', () => {
+      statusDot.style.background = '#22c55e';
+    });
+
+    socket.on('disconnect', () => {
+      statusDot.style.background = '#ef4444';
+    });
+
+    socket.on('sync_text', data => {
+      if (!data) return;
+
+      if (data.text !== undefined) {
+        displayBox.innerText = data.text || '（等待聽打員入稿...）';
+        window.scrollTo({
+          top: document.body.scrollHeight,
+          behavior: 'smooth'
+        });
+      }
+
+      if (data.font) displayBox.style.fontFamily = data.font;
+      if (data.size) displayBox.style.fontSize = (data.size * 1.3) + 'px';
+      if (data.line) displayBox.style.lineHeight = data.line;
+      if (data.color) displayBox.style.color = data.color;
+      if (data.bg) document.body.style.backgroundColor = data.bg;
+    });
+  </script>
+</body>
+</html>
