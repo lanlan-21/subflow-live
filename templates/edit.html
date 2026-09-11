@@ -187,7 +187,7 @@
       border: none;
       outline: none;
       resize: none;
-      padding: 16px 8px 100px 8px;
+      padding: 16px 8px 120px 8px;
       font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
       font-size: 48px;
       line-height: 1.1;
@@ -205,44 +205,18 @@
       z-index: 10;
     }
 
-    #mirrorDiv {
+    /* 🌟 行級協作指示器（不晃動、不跳格） */
+    .partner-indicator-bar {
       position: absolute;
-      top: 0;
-      left: 0;
-      visibility: hidden;
+      left: 2px;
+      width: 4px;
+      background: #38bdf8;
+      border-radius: 2px;
+      box-shadow: 0 0 8px #38bdf8;
+      z-index: 20;
       pointer-events: none;
-      z-index: -999;
-      white-space: pre-wrap;
-      word-break: break-all;
-      text-align: justify;
-      box-sizing: border-box;
-    }
-
-    /* 🌟 Google Docs 級別穩定游標 */
-    .remote-cursor {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 3px;
-      pointer-events: none;
-      z-index: 50;
-      will-change: transform;
-      transition: transform 0.06s cubic-bezier(0.1, 0.9, 0.2, 1);
-    }
-    
-    .remote-cursor-tag {
-      position: absolute;
-      top: -22px;
-      left: -2px;
-      color: #fff;
-      font-size: 11px;
-      font-weight: 600;
-      padding: 1px 6px;
-      border-radius: 3px;
-      white-space: nowrap;
-      user-select: none;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.6);
-      transition: none !important;
+      transition: top 0.15s ease-out;
+      display: none;
     }
 
     #aiStreamBar {
@@ -386,23 +360,9 @@
       width: 90%;
       box-shadow: 0 16px 40px rgba(0,0,0,0.6);
     }
-    .qr-card h3 {
-      color: #f8fafc;
-      font-size: 18px;
-      margin-bottom: 6px;
-    }
-    .qr-card p {
-      color: #94a3b8;
-      font-size: 13px;
-      margin-bottom: 16px;
-    }
-    #modalQrBox {
-      background: #fff;
-      padding: 12px;
-      border-radius: 12px;
-      display: inline-block;
-      margin-bottom: 16px;
-    }
+    .qr-card h3 { color: #f8fafc; font-size: 18px; margin-bottom: 6px; }
+    .qr-card p { color: #94a3b8; font-size: 13px; margin-bottom: 16px; }
+    #modalQrBox { background: #fff; padding: 12px; border-radius: 12px; display: inline-block; margin-bottom: 16px; }
     .qr-url-text {
       background: #0f172a;
       border: 1px solid #334155;
@@ -463,7 +423,6 @@
       <button class="btn-step" onclick="stepPadY(-2)">-2</button>
     </div>
 
-    <!-- 主投影按鈕 -->
     <button id="masterToggleBtn" class="btn btn-master-role active" onclick="requestMasterRole()">
       🔒 主投影 (鎖定中)
     </button>
@@ -495,9 +454,8 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... 支援雙人穩定同步"></textarea>
-      <div id="mirrorDiv"></div>
-      <div id="remoteCursorsContainer"></div>
+      <div id="partnerIndicator" class="partner-indicator-bar" title="夥伴正在此行編輯"></div>
+      <textarea id="editor" placeholder="在此打字... 支援多人即時共同協作，後登入自動載入"></textarea>
     </div>
     
     <button class="btn" id="exitFsBtn" onclick="toggleFullscreen()">✕ 退出全螢幕 (ESC)</button>
@@ -520,7 +478,6 @@
     </div>
   </div>
 
-  <!-- QR Code 彈窗 Modal -->
   <div class="qr-modal" id="qrModal" onclick="closeQrModal(event)">
     <div class="qr-card" onclick="event.stopPropagation()">
       <h3>頻道 {{ room_id }} 觀眾掃描碼</h3>
@@ -536,8 +493,7 @@
     const roomId = "{{ room_id }}";
     const editor = document.getElementById('editor');
     const editorContainer = document.getElementById('editorContainer');
-    const mirrorDiv = document.getElementById('mirrorDiv');
-    const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
+    const partnerIndicator = document.getElementById('partnerIndicator');
     const wordCount = document.getElementById('wordCount');
     const masterToggleBtn = document.getElementById('masterToggleBtn');
     const modeHintText = document.getElementById('modeHintText');
@@ -551,7 +507,6 @@
     const scaleInput = document.getElementById('scaleInput');
     const padXInput = document.getElementById('padXInput');
     const padYInput = document.getElementById('padYInput');
-    let currentBg = "#121212";
 
     let amIMaster = true;
     let currentMasterSid = null;
@@ -559,11 +514,9 @@
     let fastSyncTimer = null;
     let isApplyingRemote = false;
 
-    const remoteCursors = new Map();
     const dmp = new diff_match_patch();
     let shadowText = "";
     const BUFFER_LINES_COUNT = 6;
-
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
     function ensureTrailingBuffer() {
@@ -589,7 +542,29 @@
       }
     }
 
-    socket.on('connect', () => { socket.emit('join', { room: roomId, is_editor: true }); });
+    // 1. 連線並發送身分
+    socket.on('connect', () => {
+      socket.emit('join', { room: roomId, is_editor: true });
+    });
+
+    // 🌟 2. Google Docs 關鍵：後登入者初次載入全域文件
+    socket.on('init_document', data => {
+      if (!data) return;
+      isApplyingRemote = true;
+      editor.value = data.text || '';
+      shadowText = editor.value;
+      ensureTrailingBuffer();
+      updateWordCount();
+
+      if (data.settings) {
+        if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
+        if (data.settings.scale !== undefined) scaleInput.value = data.settings.scale;
+        if (data.settings.pad_x !== undefined) padXInput.value = data.settings.pad_x;
+        if (data.settings.pad_y !== undefined) padYInput.value = data.settings.pad_y;
+        applyLocalStyle();
+      }
+      isApplyingRemote = false;
+    });
 
     socket.on('role_status_update', data => {
       const total = data.total_editors || 1;
@@ -613,7 +588,6 @@
         masterToggleBtn.innerText = "👑 點擊接管主投影";
         modeHintText.innerText = "身分：【個人檢視】自由縮放，不影響投影幕";
       }
-      updateAllCursorTags();
     });
 
     function requestMasterRole() {
@@ -621,13 +595,14 @@
       socket.emit('claim_master', { room: roomId });
     }
 
+    // 輸入監聽
     editor.addEventListener('compositionstart', () => { isComposing = true; });
-    editor.addEventListener('compositionupdate', () => { triggerFastSync(); broadcastCursorDebounced(); });
+    editor.addEventListener('compositionupdate', () => { triggerFastSync(); broadcastCursor(); });
     editor.addEventListener('compositionend', () => {
       isComposing = false;
       ensureTrailingBuffer();
       triggerFastSync(true);
-      broadcastCursorDebounced();
+      broadcastCursor();
     });
 
     editor.addEventListener('input', () => {
@@ -638,216 +613,124 @@
     });
 
     function triggerFastSync(immediate = false) {
-      broadcastCursorDebounced();
+      broadcastCursor();
       updateWordCount();
       if (immediate) {
         clearTimeout(fastSyncTimer);
-        sendRealtimeSync();
+        sendPatchSync();
         return;
       }
       clearTimeout(fastSyncTimer);
-      fastSyncTimer = setTimeout(sendRealtimeSync, 30);
+      fastSyncTimer = setTimeout(sendPatchSync, 40);
     }
 
-    function sendRealtimeSync() {
+    // 🌟 發送補丁至後端權威合併
+    function sendPatchSync() {
       const currentText = editor.value;
       const patchList = dmp.patch_make(shadowText, currentText);
       const patchText = dmp.patch_toText(patchList);
       shadowText = currentText;
 
-      socket.emit('update_text', {
+      socket.emit('sync_patch', {
         room: roomId,
-        text: currentText,
-        clean_text: currentText.trimEnd(),
         patch: patchText,
-        font: '"DFKai-SB", "BiauKai", "標楷體", serif',
-        size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
-        line: '1.1',
-        color: '#ffff33',
-        scale: parseInt(scaleInput.value, 10) || 100,
-        pad_x: parseInt(padXInput.value, 10) || 8,
-        pad_y: parseInt(padYInput.value, 10) || 10,
-        bg: currentBg
+        text: currentText,
+        settings: {
+          size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
+          scale: parseInt(scaleInput.value, 10) || 100,
+          pad_x: parseInt(padXInput.value, 10) || 8,
+          pad_y: parseInt(padYInput.value, 10) || 10
+        }
       });
     }
 
-    socket.on('sync_text', data => {
+    // 🌟 接收來自後端的權威更新，智慧融合本地游標
+    socket.on('doc_updated', data => {
       if (!data || data.sender_sid === socket.id) return;
-      if (typeof data.text === 'string') {
-        const curPos = editor.selectionStart;
-        const oldText = editor.value;
-        if (oldText !== data.text) {
-          isApplyingRemote = true;
-          let patched = false;
-          if (data.patch && data.patch.trim().length > 0) {
-            try {
-              const patches = dmp.patch_fromText(data.patch);
-              let cursorOffset = 0;
-              for (let p of patches) {
-                if (p.start1 < curPos) cursorOffset += (p.length2 - p.length1);
-              }
-              const results = dmp.patch_apply(patches, oldText);
-              if (results[1].some(ok => ok)) {
-                editor.value = results[0];
-                shadowText = results[0];
-                const newPos = Math.max(0, Math.min(curPos + cursorOffset, editor.value.length));
-                if (!isComposing) editor.setSelectionRange(newPos, newPos);
-                patched = true;
-              }
-            } catch(e) {}
+      
+      const curPos = editor.selectionStart;
+      const oldText = editor.value;
+      isApplyingRemote = true;
+
+      let merged = false;
+      if (data.patch && data.patch.trim()) {
+        try {
+          const patches = dmp.patch_fromText(data.patch);
+          let offset = 0;
+          for (let p of patches) {
+            if (p.start1 < curPos) offset += (p.length2 - p.length1);
           }
-          if (!patched) {
-            const diff = data.text.length - oldText.length;
-            editor.value = data.text;
-            shadowText = data.text;
-            if (!isComposing) {
-              const newPos = Math.max(0, Math.min(curPos + diff, data.text.length));
-              editor.setSelectionRange(newPos, newPos);
-            }
+          const results = dmp.patch_apply(patches, oldText);
+          if (results[1].some(ok => ok)) {
+            editor.value = results[0];
+            shadowText = results[0];
+            const nextPos = Math.max(0, Math.min(curPos + offset, editor.value.length));
+            if (!isComposing) editor.setSelectionRange(nextPos, nextPos);
+            merged = true;
           }
-          ensureTrailingBuffer();
-          updateWordCount();
-          requestAnimationFrame(redrawAllRemoteCursors);
-          setTimeout(() => { isApplyingRemote = false; }, 10);
+        } catch(e) {}
+      }
+
+      if (!merged && data.text !== undefined) {
+        const diff = data.text.length - oldText.length;
+        editor.value = data.text;
+        shadowText = data.text;
+        if (!isComposing) {
+          const nextPos = Math.max(0, Math.min(curPos + diff, data.text.length));
+          editor.setSelectionRange(nextPos, nextPos);
         }
       }
-      if (!amIMaster && data.is_master) {
-        if (data.size) document.getElementById('fontSizeInput').value = data.size;
-        if (data.scale !== undefined) scaleInput.value = data.scale;
-        if (data.pad_x !== undefined) padXInput.value = data.pad_x;
-        if (data.pad_y !== undefined) padYInput.value = data.pad_y;
+
+      ensureTrailingBuffer();
+      updateWordCount();
+
+      if (!amIMaster && data.is_master && data.settings) {
+        if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
+        if (data.settings.scale !== undefined) scaleInput.value = data.settings.scale;
+        if (data.settings.pad_x !== undefined) padXInput.value = data.settings.pad_x;
+        if (data.settings.pad_y !== undefined) padYInput.value = data.settings.pad_y;
         applyLocalStyle();
       }
+
+      setTimeout(() => { isApplyingRemote = false; }, 10);
     });
 
-    editor.addEventListener('click', broadcastCursorDebounced);
-    editor.addEventListener('keyup', broadcastCursorDebounced);
-    editor.addEventListener('keydown', () => setTimeout(broadcastCursorDebounced, 0));
-    editor.addEventListener('focus', broadcastCursorDebounced);
+    // 🌟 游標行級指示器（零震動，清楚知道夥伴在哪一行）
+    editor.addEventListener('click', broadcastCursor);
+    editor.addEventListener('keyup', broadcastCursor);
+    editor.addEventListener('focus', broadcastCursor);
 
-    let lastSentCursor = -1;
-    let cursorSendTimer = null;
-    function broadcastCursorDebounced() {
+    function broadcastCursor() {
       if (isApplyingRemote) return;
-      clearTimeout(cursorSendTimer);
-      cursorSendTimer = setTimeout(() => {
-        const pos = editor.selectionStart;
-        if (pos !== lastSentCursor) {
-          lastSentCursor = pos;
-          socket.emit('cursor_move', { room: roomId, cursor_index: pos });
-        }
-      }, 20);
+      const pos = editor.selectionStart;
+      socket.emit('cursor_move', { room: roomId, cursor_index: pos });
     }
 
     socket.on('cursor_update', data => {
-      if (!data || !data.sid || data.sid === socket.id) return;
-      updateRemoteCursor(data.sid, data.cursor_index);
+      if (!data || data.sid === socket.id) return;
+      renderPartnerLine(data.cursor_index);
     });
 
-    socket.on('cursor_remove', data => {
-      if (data && data.sid && remoteCursors.has(data.sid)) {
-        const item = remoteCursors.get(data.sid);
-        if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
-        remoteCursors.delete(data.sid);
-      }
+    socket.on('cursor_remove', () => {
+      partnerIndicator.style.display = 'none';
     });
 
-    function updateRemoteCursor(sid, cursorIndex) {
-      let item = remoteCursors.get(sid);
-      if (!item) {
-        const isTargetMaster = (sid === currentMasterSid);
-        const color = isTargetMaster ? '#22c55e' : '#38bdf8';
-        const label = isTargetMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
-        const el = document.createElement('div');
-        el.className = 'remote-cursor';
-        el.style.backgroundColor = color;
-        el.style.boxShadow = `0 0 6px ${color}`;
+    function renderPartnerLine(cursorIndex) {
+      if (!editor.value) return;
+      const textBefore = editor.value.substring(0, cursorIndex);
+      const lineNumber = textBefore.split('\n').length - 1;
 
-        const tag = document.createElement('div');
-        tag.className = 'remote-cursor-tag';
-        tag.style.backgroundColor = color;
-        tag.innerText = label;
-
-        el.appendChild(tag);
-        remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag, lastX: -1, lastY: -1 };
-        remoteCursors.set(sid, item);
-      } else {
-        item.index = cursorIndex;
-      }
-
-      renderSingleRemoteCursor(sid);
-    }
-
-    function updateAllCursorTags() {
-      remoteCursors.forEach((item, sid) => {
-        const isTargetMaster = (sid === currentMasterSid);
-        const color = isTargetMaster ? '#22c55e' : '#38bdf8';
-        const label = isTargetMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
-        item.element.style.backgroundColor = color;
-        item.element.style.boxShadow = `0 0 6px ${color}`;
-        item.tagElement.style.backgroundColor = color;
-        item.tagElement.innerText = label;
-      });
-    }
-
-    // 🌟 Google Docs 級別座標算法：精準對齊邊界，硬體加速位移
-    function renderSingleRemoteCursor(sid) {
-      const item = remoteCursors.get(sid);
-      if (!item || editor.value === undefined) return;
-
-      const el = item.element;
-      const targetIndex = Math.min(Math.max(item.index, 0), editor.value.length);
       const cs = window.getComputedStyle(editor);
-
-      // 完全同步所有外觀數值至測量層
-      mirrorDiv.style.fontFamily = cs.fontFamily;
-      mirrorDiv.style.fontSize = cs.fontSize;
-      mirrorDiv.style.lineHeight = cs.lineHeight;
-      mirrorDiv.style.letterSpacing = cs.letterSpacing;
-      mirrorDiv.style.wordBreak = cs.wordBreak;
-      mirrorDiv.style.whiteSpace = cs.whiteSpace;
-      mirrorDiv.style.paddingLeft = cs.paddingLeft;
-      mirrorDiv.style.paddingRight = cs.paddingRight;
-      mirrorDiv.style.paddingTop = cs.paddingTop;
-      mirrorDiv.style.borderLeftWidth = cs.borderLeftWidth;
-      mirrorDiv.style.borderRightWidth = cs.borderRightWidth;
-      mirrorDiv.style.width = editor.clientWidth + 'px';
-
-      const beforeText = editor.value.substring(0, targetIndex);
-      
-      mirrorDiv.textContent = '';
-      const textNode = document.createTextNode(beforeText);
-      mirrorDiv.appendChild(textNode);
-      
-      const probe = document.createElement('span');
-      probe.textContent = '|';
-      probe.style.display = 'inline';
-      probe.style.padding = '0';
-      probe.style.margin = '0';
-      probe.style.border = '0';
-      mirrorDiv.appendChild(probe);
-
-      const targetX = probe.offsetLeft;
-      const targetY = probe.offsetTop;
-      const fontHeight = parseFloat(cs.fontSize) || 48;
+      const fontSize = parseFloat(cs.fontSize) || 48;
+      const lineHeight = fontSize * 1.1;
+      const paddingTop = parseFloat(cs.paddingTop) || 16;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
-      // 只有在座標真正產生位移時才動用 GPU 重繪，避免原地震顫
-      if (Math.abs(item.lastX - targetX) > 0.5 || Math.abs(item.lastY - targetY) > 0.5) {
-        item.lastX = targetX;
-        item.lastY = targetY;
-        el.style.height = fontHeight + 'px';
-        el.style.transform = `translate3d(${targetX * scaleVal}px, ${targetY * scaleVal}px, 0)`;
-      }
+      const topPos = (paddingTop + (lineNumber * lineHeight)) * scaleVal;
+      partnerIndicator.style.top = topPos + 'px';
+      partnerIndicator.style.height = (lineHeight * scaleVal) + 'px';
+      partnerIndicator.style.display = 'block';
     }
-
-    function redrawAllRemoteCursors() {
-      for (const sid of remoteCursors.keys()) renderSingleRemoteCursor(sid);
-    }
-
-    editorContainer.addEventListener('scroll', redrawAllRemoteCursors);
-    window.addEventListener('resize', () => { autoGrowTextarea(); redrawAllRemoteCursors(); });
 
     function applyLocalStyle() {
       const px = padXInput.value + 'px';
@@ -855,7 +738,7 @@
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
       editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      editor.style.padding = `${py} ${px} 100px ${px}`;
+      editor.style.padding = `${py} ${px} 120px ${px}`;
       if ('zoom' in editor.style) {
         editor.style.zoom = scaleVal;
       } else {
@@ -863,7 +746,6 @@
         editor.style.width = `${100 / scaleVal}%`;
       }
       autoGrowTextarea();
-      redrawAllRemoteCursors();
     }
 
     function applyAndSync() { applyLocalStyle(); triggerFastSync(true); }
@@ -910,14 +792,8 @@
         });
       }
     }
-    function closeQrModal(e) {
-      document.getElementById('qrModal').classList.remove('active');
-    }
-    function copyAudienceLink() {
-      navigator.clipboard.writeText(audienceUrl).then(() => {
-        alert('已複製【觀眾免密碼觀看連結】！');
-      });
-    }
+    function closeQrModal(e) { document.getElementById('qrModal').classList.remove('active'); }
+    function copyAudienceLink() { navigator.clipboard.writeText(audienceUrl).then(() => alert('已複製【觀眾免密碼觀看連結】！')); }
 
     function getFileTimestamp() {
       const now = new Date();
@@ -949,6 +825,7 @@
       downloadBlob(new Blob(["\uFEFF" + wordHtml], { type: 'application/msword;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.doc`);
     }
 
+    // AI 增量語音引擎
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
