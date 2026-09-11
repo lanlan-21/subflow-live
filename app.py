@@ -11,7 +11,7 @@ app.config['SESSION_PERMANENT'] = False
 
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# 🌟 全域狀態儲存（Single Source of Truth）
+# 伺服器端單一真相來源（保證後登入者一定拿得到全文）
 room_documents = {}  # room_id -> {"text": str, "version": int, "settings": dict}
 room_masters = {}    # room_id -> master_sid
 room_editors = {}    # room_id -> set of editor sids
@@ -79,8 +79,6 @@ def new_room():
 def page_not_found(e):
     return redirect('/')
 
-# ================= Socket.IO 協同架構 =================
-
 @socketio.on('join')
 def on_join(data):
     room = data.get('room')
@@ -100,7 +98,7 @@ def on_join(data):
 
         broadcast_role_status(room)
 
-    # 🌟 後登入者立即獲得當前完整文檔與設定（比照 Google Docs 載入）
+    # 後登入者立即獲得伺服器最新全文與排版設定
     emit('init_document', {
         'text': doc['text'],
         'version': doc['version'],
@@ -115,47 +113,39 @@ def on_claim_master(data):
         room_masters[room] = sid
         broadcast_role_status(room)
 
-# 🌟 核心：Google Docs 式差量合併邏輯
-@socketio.on('sync_patch')
-def on_sync_patch(data):
+@socketio.on('sync_text')
+def on_sync_text(data):
     room = data.get('room')
     sid = request.sid
-    patch_text = data.get('patch')
-    full_text_fallback = data.get('text')
-    settings = data.get('settings', {})
-
     doc = get_room_doc(room)
-    current_server_text = doc['text']
-
-    # 若傳送 Patch 補丁，在後端權威套用合併
+    
+    incoming_text = data.get('text', '')
+    patch_text = data.get('patch', '')
+    
+    # 權威合併更新
     if patch_text and patch_text.strip():
         try:
             patches = dmp.patch_fromText(patch_text)
-            applied_text, results = dmp.patch_apply(patches, current_server_text)
+            applied_text, _ = dmp.patch_apply(patches, doc['text'])
             doc['text'] = applied_text
         except Exception:
-            if full_text_fallback is not None:
-                doc['text'] = full_text_fallback
+            doc['text'] = incoming_text
     else:
-        if full_text_fallback is not None:
-            doc['text'] = full_text_fallback
+        doc['text'] = incoming_text
 
     doc['version'] += 1
-
-    # 主控台才有權限更新字體版型設定
+    
     is_master = (room_masters.get(room) == sid)
-    if is_master and settings:
-        doc['settings'].update(settings)
+    if is_master:
+        if 'size' in data: doc['settings']['size'] = data['size']
+        if 'scale' in data: doc['settings']['scale'] = data['scale']
+        if 'pad_x' in data: doc['settings']['pad_x'] = data['pad_x']
+        if 'pad_y' in data: doc['settings']['pad_y'] = data['pad_y']
 
-    # 廣播更新給房間所有人（包含觀眾與協作者）
-    emit('doc_updated', {
-        'sender_sid': sid,
-        'text': doc['text'],
-        'version': doc['version'],
-        'patch': patch_text,
-        'settings': doc['settings'],
-        'is_master': is_master
-    }, to=room, include_self=False)
+    data['text'] = doc['text']
+    data['sender_sid'] = sid
+    data['is_master'] = is_master
+    emit('sync_text', data, to=room, include_self=False)
 
 @socketio.on('cursor_move')
 def on_cursor_move(data):
