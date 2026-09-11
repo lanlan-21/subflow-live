@@ -205,7 +205,6 @@
       z-index: 10;
     }
 
-    /* 測量層精確同步樣式，避免任何排版誤差 */
     #mirrorDiv {
       position: absolute;
       top: 0;
@@ -216,18 +215,21 @@
       white-space: pre-wrap;
       word-break: break-all;
       text-align: justify;
+      box-sizing: border-box;
     }
 
-    /* 🌟 穩定無閃爍遠端游標：常態實體呈現，無補間跳動 */
+    /* 🌟 Google Docs 級別穩定游標 */
     .remote-cursor {
       position: absolute;
+      top: 0;
+      left: 0;
       width: 3px;
       pointer-events: none;
       z-index: 50;
-      display: block;
-      opacity: 1 !important;
-      transition: none !important;
+      will-change: transform;
+      transition: transform 0.06s cubic-bezier(0.1, 0.9, 0.2, 1);
     }
+    
     .remote-cursor-tag {
       position: absolute;
       top: -22px;
@@ -493,7 +495,7 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... 支援夥伴平順同步，游標不閃爍"></textarea>
+      <textarea id="editor" placeholder="在此打字... 支援雙人穩定同步"></textarea>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
     </div>
@@ -620,12 +622,12 @@
     }
 
     editor.addEventListener('compositionstart', () => { isComposing = true; });
-    editor.addEventListener('compositionupdate', () => { triggerFastSync(); broadcastCursorImmediately(); });
+    editor.addEventListener('compositionupdate', () => { triggerFastSync(); broadcastCursorDebounced(); });
     editor.addEventListener('compositionend', () => {
       isComposing = false;
       ensureTrailingBuffer();
       triggerFastSync(true);
-      broadcastCursorImmediately();
+      broadcastCursorDebounced();
     });
 
     editor.addEventListener('input', () => {
@@ -636,7 +638,7 @@
     });
 
     function triggerFastSync(immediate = false) {
-      broadcastCursorImmediately();
+      broadcastCursorDebounced();
       updateWordCount();
       if (immediate) {
         clearTimeout(fastSyncTimer);
@@ -705,7 +707,6 @@
           }
           ensureTrailingBuffer();
           updateWordCount();
-          // 文字同步時，同步更新夥伴游標位置，保持平順
           requestAnimationFrame(redrawAllRemoteCursors);
           setTimeout(() => { isApplyingRemote = false; }, 10);
         }
@@ -719,22 +720,23 @@
       }
     });
 
-    editor.addEventListener('click', broadcastCursorImmediately);
-    editor.addEventListener('keyup', broadcastCursorImmediately);
-    editor.addEventListener('keydown', () => setTimeout(broadcastCursorImmediately, 0));
-    editor.addEventListener('focus', broadcastCursorImmediately);
-    document.addEventListener('selectionchange', () => {
-      if (document.activeElement === editor) broadcastCursorImmediately();
-    });
+    editor.addEventListener('click', broadcastCursorDebounced);
+    editor.addEventListener('keyup', broadcastCursorDebounced);
+    editor.addEventListener('keydown', () => setTimeout(broadcastCursorDebounced, 0));
+    editor.addEventListener('focus', broadcastCursorDebounced);
 
     let lastSentCursor = -1;
-    function broadcastCursorImmediately() {
+    let cursorSendTimer = null;
+    function broadcastCursorDebounced() {
       if (isApplyingRemote) return;
-      const pos = editor.selectionStart;
-      if (pos !== lastSentCursor) {
-        lastSentCursor = pos;
-        socket.emit('cursor_move', { room: roomId, cursor_index: pos });
-      }
+      clearTimeout(cursorSendTimer);
+      cursorSendTimer = setTimeout(() => {
+        const pos = editor.selectionStart;
+        if (pos !== lastSentCursor) {
+          lastSentCursor = pos;
+          socket.emit('cursor_move', { room: roomId, cursor_index: pos });
+        }
+      }, 20);
     }
 
     socket.on('cursor_update', data => {
@@ -750,7 +752,6 @@
       }
     });
 
-    // 🌟 核心修復：常態存在、零延遲硬就位、完全無抽動
     function updateRemoteCursor(sid, cursorIndex) {
       let item = remoteCursors.get(sid);
       if (!item) {
@@ -769,7 +770,7 @@
 
         el.appendChild(tag);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag };
+        item = { index: cursorIndex, element: el, tagElement: tag, lastX: -1, lastY: -1 };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
@@ -790,7 +791,7 @@
       });
     }
 
-    // 精確排版測量：字到哪、游標就直接跟到哪，如原生打字般穩定
+    // 🌟 Google Docs 級別座標算法：精準對齊邊界，硬體加速位移
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || editor.value === undefined) return;
@@ -799,6 +800,7 @@
       const targetIndex = Math.min(Math.max(item.index, 0), editor.value.length);
       const cs = window.getComputedStyle(editor);
 
+      // 完全同步所有外觀數值至測量層
       mirrorDiv.style.fontFamily = cs.fontFamily;
       mirrorDiv.style.fontSize = cs.fontSize;
       mirrorDiv.style.lineHeight = cs.lineHeight;
@@ -808,25 +810,36 @@
       mirrorDiv.style.paddingLeft = cs.paddingLeft;
       mirrorDiv.style.paddingRight = cs.paddingRight;
       mirrorDiv.style.paddingTop = cs.paddingTop;
+      mirrorDiv.style.borderLeftWidth = cs.borderLeftWidth;
+      mirrorDiv.style.borderRightWidth = cs.borderRightWidth;
       mirrorDiv.style.width = editor.clientWidth + 'px';
 
       const beforeText = editor.value.substring(0, targetIndex);
-      const afterText = editor.value.substring(targetIndex);
-
-      mirrorDiv.innerHTML = '';
-      mirrorDiv.appendChild(document.createTextNode(beforeText));
+      
+      mirrorDiv.textContent = '';
+      const textNode = document.createTextNode(beforeText);
+      mirrorDiv.appendChild(textNode);
+      
       const probe = document.createElement('span');
-      probe.textContent = '\u200b';
+      probe.textContent = '|';
+      probe.style.display = 'inline';
+      probe.style.padding = '0';
+      probe.style.margin = '0';
+      probe.style.border = '0';
       mirrorDiv.appendChild(probe);
-      mirrorDiv.appendChild(document.createTextNode(afterText));
 
+      const targetX = probe.offsetLeft;
+      const targetY = probe.offsetTop;
       const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
-      
-      el.style.left = probe.offsetLeft + 'px';
-      el.style.top = probe.offsetTop + 'px';
-      el.style.height = fontHeight + 'px';
-      el.style.zoom = scaleVal;
+
+      // 只有在座標真正產生位移時才動用 GPU 重繪，避免原地震顫
+      if (Math.abs(item.lastX - targetX) > 0.5 || Math.abs(item.lastY - targetY) > 0.5) {
+        item.lastX = targetX;
+        item.lastY = targetY;
+        el.style.height = fontHeight + 'px';
+        el.style.transform = `translate3d(${targetX * scaleVal}px, ${targetY * scaleVal}px, 0)`;
+      }
     }
 
     function redrawAllRemoteCursors() {
