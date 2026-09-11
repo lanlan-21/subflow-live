@@ -217,7 +217,7 @@
       text-align: justify;
     }
 
-    /* 鎖定零延遲、不抖動游標樣式 */
+    /* 🌟 零延遲、絕不垂直彈跳的實體游標 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -528,7 +528,6 @@
     const scaleInput = document.getElementById('scaleInput');
     const padXInput = document.getElementById('padXInput');
     const padYInput = document.getElementById('padYInput');
-    let currentBg = "#121212";
 
     let amIMaster = true;
     let currentMasterSid = null;
@@ -565,12 +564,10 @@
       }
     }
 
-    // 1. 連線
     socket.on('connect', () => { 
       socket.emit('join', { room: roomId, is_editor: true }); 
     });
 
-    // 2. 後登入者立即獲得伺服器權威全文（解決後進來看不到問題）
     socket.on('init_document', data => {
       if (!data) return;
       isApplyingRemote = true;
@@ -619,7 +616,6 @@
       socket.emit('claim_master', { room: roomId });
     }
 
-    // 3. 輸入監聽
     editor.addEventListener('compositionstart', () => { isComposing = true; });
     editor.addEventListener('compositionupdate', () => { triggerFastSync(); broadcastCursorImmediately(); });
     editor.addEventListener('compositionend', () => {
@@ -666,7 +662,6 @@
       });
     }
 
-    // 4. 接收同步
     socket.on('sync_text', data => {
       if (!data || data.sender_sid === socket.id) return;
       if (typeof data.text === 'string') {
@@ -716,7 +711,6 @@
       }
     });
 
-    // 5. 游標廣播
     editor.addEventListener('click', broadcastCursorImmediately);
     editor.addEventListener('keyup', broadcastCursorImmediately);
     editor.addEventListener('keydown', () => setTimeout(broadcastCursorImmediately, 0));
@@ -766,7 +760,7 @@
 
         el.appendChild(tag);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag };
+        item = { index: cursorIndex, element: el, tagElement: tag, stableY: 0, lastLineIdx: -1 };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
@@ -786,7 +780,7 @@
       });
     }
 
-    // 零動畫直定渲染，無過渡補間
+    // 🌟 核心防彈跳測量演算法：凍結 Y 軸瞬發下墜
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || !editor.value) return;
@@ -811,15 +805,35 @@
 
       mirrorDiv.innerHTML = '';
       mirrorDiv.appendChild(document.createTextNode(beforeText));
+      
+      // 🌟 改用無寬度實體邊界探針（避免換行折射瞬跳）
       const probe = document.createElement('span');
-      probe.textContent = '\u200b';
+      probe.style.display = 'inline-block';
+      probe.style.width = '0px';
+      probe.style.height = cs.fontSize;
+      probe.style.verticalAlign = 'baseline';
+      probe.textContent = '';
       mirrorDiv.appendChild(probe);
       mirrorDiv.appendChild(document.createTextNode(afterText));
 
       const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
-      el.style.left = probe.offsetLeft + 'px';
-      el.style.top = probe.offsetTop + 'px';
+      
+      const rawX = probe.offsetLeft;
+      let rawY = probe.offsetTop;
+
+      // 🌟 Y 軸基準線防抖判定：
+      // 如果 X 座標在行尾且此時並無按下換行符號，防止瀏覽器在排版瞬間誤判掉到下一行
+      const lastChar = beforeText.slice(-1);
+      if (rawX === 0 && targetIndex > 0 && lastChar !== '\n') {
+        // 若瞬跳到第 0 列但沒敲換行，維持上一刻的穩定高度
+        if (item.stableY > 0) rawY = item.stableY;
+      } else {
+        item.stableY = rawY;
+      }
+
+      el.style.left = rawX + 'px';
+      el.style.top = rawY + 'px';
       el.style.height = fontHeight + 'px';
       el.style.zoom = scaleVal;
       el.style.display = 'block';
