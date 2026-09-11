@@ -11,10 +11,11 @@ app.config['SESSION_PERMANENT'] = False
 
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# 伺服器端單一真相來源（保證後登入者一定拿得到全文）
+# 伺服器端單一真相來源
 room_documents = {}  # room_id -> {"text": str, "version": int, "settings": dict}
 room_masters = {}    # room_id -> master_sid
 room_editors = {}    # room_id -> set of editor sids
+room_viewers = {}    # room_id -> set of viewer sids
 
 dmp = diff_match_patch()
 
@@ -95,8 +96,13 @@ def on_join(data):
 
         if room not in room_masters or room_masters[room] is None:
             room_masters[room] = sid
+    else:
+        # 觀眾端加入
+        if room not in room_viewers:
+            room_viewers[room] = set()
+        room_viewers[room].add(sid)
 
-        broadcast_role_status(room)
+    broadcast_role_status(room)
 
     # 後登入者立即獲得伺服器最新全文與排版設定
     emit('init_document', {
@@ -122,7 +128,6 @@ def on_sync_text(data):
     incoming_text = data.get('text', '')
     patch_text = data.get('patch', '')
     
-    # 權威合併更新
     if patch_text and patch_text.strip():
         try:
             patches = dmp.patch_fromText(patch_text)
@@ -159,25 +164,37 @@ def on_cursor_move(data):
 @socketio.on('disconnect')
 def on_disconnect():
     sid = request.sid
-    for room, editors in list(room_editors.items()):
-        if sid in editors:
-            editors.remove(sid)
+    for room in list(set(list(room_editors.keys()) + list(room_viewers.keys()))):
+        need_broadcast = False
+        
+        # 檢查是否為聽打員離線
+        if room in room_editors and sid in room_editors[room]:
+            room_editors[room].remove(sid)
             emit('cursor_remove', {'sid': sid}, to=room)
 
             if room_masters.get(room) == sid:
-                if len(editors) > 0:
-                    room_masters[room] = next(iter(editors))
+                if len(room_editors[room]) > 0:
+                    room_masters[room] = next(iter(room_editors[room]))
                 else:
                     room_masters[room] = None
+            need_broadcast = True
 
+        # 檢查是否為觀眾離線
+        if room in room_viewers and sid in room_viewers[room]:
+            room_viewers[room].remove(sid)
+            need_broadcast = True
+
+        if need_broadcast:
             broadcast_role_status(room)
 
 def broadcast_role_status(room):
-    total = len(room_editors.get(room, set()))
+    total_editors = len(room_editors.get(room, set()))
+    total_viewers = len(room_viewers.get(room, set()))
     master = room_masters.get(room)
     socketio.emit('role_status_update', {
         'master_sid': master,
-        'total_editors': total
+        'total_editors': total_editors,
+        'total_viewers': total_viewers
     }, to=room)
 
 if __name__ == '__main__':
