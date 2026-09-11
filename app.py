@@ -2,35 +2,43 @@ import os
 import uuid
 from flask import Flask, render_template, request, redirect, session, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
+from diff_match_patch import diff_match_patch
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "steno_private_secret_key_2026")
-
-# 專屬管理密碼（支援由 Render 環境變數注入，預設 8888）
 SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "8888")
-
-# 關閉持久化 Session：瀏覽器關閉即需重新驗證
 app.config['SESSION_PERMANENT'] = False
 
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# 記憶體狀態追蹤
-room_masters = {}   # room_id -> master_sid
-room_editors = {}   # room_id -> set of editor sids
+# 🌟 全域狀態儲存（Single Source of Truth）
+room_documents = {}  # room_id -> {"text": str, "version": int, "settings": dict}
+room_masters = {}    # room_id -> master_sid
+room_editors = {}    # room_id -> set of editor sids
+
+dmp = diff_match_patch()
+
+def get_room_doc(room_id):
+    if room_id not in room_documents:
+        room_documents[room_id] = {
+            "text": "",
+            "version": 0,
+            "settings": {
+                "size": 48,
+                "scale": 100,
+                "pad_x": 8,
+                "pad_y": 10
+            }
+        }
+    return room_documents[room_id]
 
 @app.before_request
 def require_login():
-    # 1. 靜態資源、登入頁放行
     if request.endpoint in ['login', 'static']:
         return None
-    
-    # 2. 觀眾投影看版全面免密碼放行
     if request.path.startswith('/view/'):
         return None
-    
-    # 3. 控制台與首頁驗證攔截
     if not session.get('authenticated'):
-        # 排除 login 本身，只在合法路由下記錄目標頁面
         if request.endpoint and request.endpoint != 'login':
             session['next_url'] = request.path
         return redirect(url_for('login'))
@@ -42,8 +50,6 @@ def login():
         user_input_pass = request.form.get('password', '')
         if user_input_pass == SITE_PASSWORD:
             session['authenticated'] = True
-            
-            # 安全取得目標頁面，若不存在或有異常，一律直接回首頁
             target_path = session.pop('next_url', None)
             if not target_path or target_path == '/login':
                 return redirect('/')
@@ -69,10 +75,11 @@ def new_room():
     unique_id = str(uuid.uuid4())[:8]
     return redirect(f'/edit/{unique_id}')
 
-# 🌟 404 防呆：萬一網址打錯或迷路，自動平滑回首頁，不報錯
 @app.errorhandler(404)
 def page_not_found(e):
     return redirect('/')
+
+# ================= Socket.IO 協同架構 =================
 
 @socketio.on('join')
 def on_join(data):
@@ -81,6 +88,7 @@ def on_join(data):
     sid = request.sid
 
     join_room(room)
+    doc = get_room_doc(room)
 
     if is_editor:
         if room not in room_editors:
@@ -92,6 +100,13 @@ def on_join(data):
 
         broadcast_role_status(room)
 
+    # 🌟 後登入者立即獲得當前完整文檔與設定（比照 Google Docs 載入）
+    emit('init_document', {
+        'text': doc['text'],
+        'version': doc['version'],
+        'settings': doc['settings']
+    }, room=sid)
+
 @socketio.on('claim_master')
 def on_claim_master(data):
     room = data.get('room')
@@ -100,13 +115,47 @@ def on_claim_master(data):
         room_masters[room] = sid
         broadcast_role_status(room)
 
-@socketio.on('update_text')
-def on_update_text(data):
+# 🌟 核心：Google Docs 式差量合併邏輯
+@socketio.on('sync_patch')
+def on_sync_patch(data):
     room = data.get('room')
     sid = request.sid
-    data['sender_sid'] = sid
-    data['is_master'] = (room_masters.get(room) == sid)
-    emit('sync_text', data, to=room, include_self=False)
+    patch_text = data.get('patch')
+    full_text_fallback = data.get('text')
+    settings = data.get('settings', {})
+
+    doc = get_room_doc(room)
+    current_server_text = doc['text']
+
+    # 若傳送 Patch 補丁，在後端權威套用合併
+    if patch_text and patch_text.strip():
+        try:
+            patches = dmp.patch_fromText(patch_text)
+            applied_text, results = dmp.patch_apply(patches, current_server_text)
+            doc['text'] = applied_text
+        except Exception:
+            if full_text_fallback is not None:
+                doc['text'] = full_text_fallback
+    else:
+        if full_text_fallback is not None:
+            doc['text'] = full_text_fallback
+
+    doc['version'] += 1
+
+    # 主控台才有權限更新字體版型設定
+    is_master = (room_masters.get(room) == sid)
+    if is_master and settings:
+        doc['settings'].update(settings)
+
+    # 廣播更新給房間所有人（包含觀眾與協作者）
+    emit('doc_updated', {
+        'sender_sid': sid,
+        'text': doc['text'],
+        'version': doc['version'],
+        'patch': patch_text,
+        'settings': doc['settings'],
+        'is_master': is_master
+    }, to=room, include_self=False)
 
 @socketio.on('cursor_move')
 def on_cursor_move(data):
