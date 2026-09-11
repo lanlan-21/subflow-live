@@ -13,6 +13,7 @@
       -ms-user-select: none;
       user-select: none;
       -webkit-touch-callout: none;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", "TW-Kai", serif !important;
     }
     html, body {
       margin: 0 !important;
@@ -21,7 +22,7 @@
       height: 100vh;
       background-color: #121212;
       color: #ffff33;
-      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", "TW-Kai", serif !important;
       overflow-x: hidden;
       overflow-y: auto;
       -webkit-font-smoothing: antialiased;
@@ -44,6 +45,7 @@
       text-align: justify;
       transform-origin: top left;
       cursor: default;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", "TW-Kai", serif !important;
     }
 
     .top-hover-sensor {
@@ -64,7 +66,7 @@
       backdrop-filter: blur(8px);
       padding: 8px 14px;
       border-radius: 8px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
       font-size: 13px;
       color: #e2e8f0;
       opacity: 0;
@@ -108,7 +110,7 @@
       backdrop-filter: blur(8px);
       padding: 6px 12px;
       border-radius: 30px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
       box-shadow: 0 6px 20px rgba(0,0,0,0.5);
       z-index: 1000;
       opacity: 0;
@@ -181,13 +183,12 @@
 
     document.getElementById('liveUrl').innerText = window.location.href;
 
-    // 清理舊快取，保證開房或重整永遠從乾淨的 100% 基準開始
     try {
       localStorage.removeItem('viewer_zoom_' + roomId);
     } catch(e) {}
 
     let masterBaseScale = 100;
-    let personalZoom = 100; // 絕對鎖定預設 100%
+    let personalZoom = 100;
     let pillTimer = null;
 
     applyCombinedScale();
@@ -209,6 +210,9 @@
         });
       }
 
+      // 強制維持標楷體字型
+      box.style.fontFamily = '"DFKai-SB", "BiauKai", "標楷體", "TW-Kai", serif';
+
       if (data.size) box.style.fontSize = data.size + 'px';
       if (data.pad_x !== undefined && data.pad_y !== undefined) {
         box.style.padding = `${data.pad_y}px ${data.pad_x}px 70px ${data.pad_x}px`;
@@ -228,12 +232,10 @@
       if ('zoom' in box.style) {
         box.style.zoom = s;
       } else {
-        box.style.transform = `scale(${s})`;
-        box.style.width = `${100 / s}%`;
+        box.style.transform = `scale(${scaleVal})`;
       }
     }
 
-    // 調整只在當前頁面生命週期有效，不再存入 localStorage
     function adjustPersonalScale(delta) {
       personalZoom = Math.min(Math.max(personalZoom + delta, 50), 200);
       applyCombinedScale();
