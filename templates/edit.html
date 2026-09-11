@@ -179,6 +179,8 @@
       height: 100%;
       overflow-y: scroll;
       overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
     }
 
     #editor {
@@ -187,7 +189,7 @@
       border: none;
       outline: none;
       resize: none;
-      padding: 16px 8px 120px 8px;
+      padding: 16px 8px 30px 8px;
       font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
       font-size: 48px;
       line-height: 1.1;
@@ -203,6 +205,38 @@
       display: block;
       position: relative;
       z-index: 10;
+    }
+
+    /* 🌟 底部視覺防呆警示線 */
+    .editor-end-divider {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      margin: 10px 20px 80px 20px;
+      user-select: none;
+      pointer-events: none;
+      opacity: 0.75;
+      z-index: 5;
+    }
+    .editor-end-divider::before,
+    .editor-end-divider::after {
+      content: '';
+      flex: 1;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #ef4444, #f59e0b, transparent);
+    }
+    .editor-end-tag {
+      background: #27272a;
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+      font-size: 13px;
+      font-weight: bold;
+      padding: 3px 12px;
+      border-radius: 12px;
+      letter-spacing: 1px;
+      white-space: nowrap;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.35);
     }
 
     #mirrorDiv {
@@ -485,6 +519,10 @@
 
     <div class="editor-container" id="editorContainer">
       <textarea id="editor" placeholder="在此打字... 支援雙人穩定差量同步"></textarea>
+      <!-- 🌟 底部視覺防呆警示線 -->
+      <div class="editor-end-divider" id="editorEndDivider">
+        <span class="editor-end-tag">⛔ END 底線（請多敲幾次 Enter 保留視野）</span>
+      </div>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
     </div>
@@ -556,7 +594,6 @@
     const BUFFER_LINES_COUNT = 6;
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
-    // 🌟 離開頁面防誤關彈窗（編輯區有文字時，重整、按叉叉或離開頁面會跳出確認）
     window.addEventListener('beforeunload', (e) => {
       if (editor.value.trim().length > 0) {
         e.preventDefault();
@@ -581,7 +618,7 @@
     }
 
     function autoGrowTextarea() {
-      const minHeight = editorContainer.clientHeight + 400;
+      const minHeight = editorContainer.clientHeight - 100;
       if (editor.scrollHeight > editor.clientHeight || editor.clientHeight < minHeight) {
         editor.style.height = Math.max(editor.scrollHeight, minHeight) + 'px';
       }
@@ -887,7 +924,7 @@
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
       editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      editor.style.padding = `${py} ${px} 120px ${px}`;
+      editor.style.padding = `${py} ${px} 30px ${px}`;
       if ('zoom' in editor.style) {
         editor.style.zoom = scaleVal;
       } else {
