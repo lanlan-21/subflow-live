@@ -187,7 +187,7 @@
       border: none;
       outline: none;
       resize: none;
-      padding: 16px 8px 160px 8px;
+      padding: 16px 8px 120px 8px;
       font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
       font-size: 48px;
       line-height: 1.1;
@@ -203,6 +203,33 @@
       display: block;
       position: relative;
       z-index: 10;
+    }
+
+    /* 🌟 動態跟隨在最後一行的實體 END 標記線 */
+    #endLineMarker {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      height: 22px;
+      border-top: 1px dashed rgba(239, 68, 68, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      pointer-events: none;
+      z-index: 15;
+      user-select: none;
+    }
+    #endLineMarker span {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.5);
+      color: #f87171;
+      font-size: 11px;
+      font-family: monospace;
+      font-weight: bold;
+      padding: 1px 6px;
+      border-radius: 3px;
+      margin-top: -12px;
+      letter-spacing: 1px;
     }
 
     #mirrorDiv {
@@ -298,37 +325,16 @@
     }
     #exitFsBtn:hover { opacity: 0.9; }
 
-    /* 🌟 底部資訊欄：上方帶有清楚的紅色 END 警示線 */
     .statusbar {
-      position: relative;
-      padding: 7px 16px;
-      background: #18181b;
-      border-top: 2px solid #ef4444;
-      box-shadow: 0 -2px 10px rgba(239, 68, 68, 0.25);
+      padding: 6px 16px;
+      background: #1e1e1e;
+      border-top: 1px solid #333;
       font-size: 13px;
       color: #94a3b8;
       display: flex;
       justify-content: space-between;
       align-items: center;
       z-index: 100;
-    }
-
-    /* 醒目的 END 警示徽章，浮在底部邊界中央 */
-    .bottom-end-indicator {
-      position: absolute;
-      top: -11px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: #ef4444;
-      color: #fff;
-      font-size: 11px;
-      font-weight: 800;
-      letter-spacing: 1.5px;
-      padding: 1px 12px;
-      border-radius: 10px;
-      box-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
-      user-select: none;
-      pointer-events: none;
     }
 
     .status-right-box {
@@ -508,6 +514,8 @@
 
     <div class="editor-container" id="editorContainer">
       <textarea id="editor" placeholder="在此打字... 支援雙人穩定差量同步"></textarea>
+      <!-- 🌟 跟隨輸入框最後一行的動態標記線 -->
+      <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
     </div>
@@ -521,9 +529,7 @@
     <span id="aiInterimText">請說話，字詞將即時推進編輯區...</span>
   </div>
 
-  <!-- 🌟 底部資訊欄：自帶紅色實體橫線與 END 警示 -->
   <div class="statusbar">
-    <div class="bottom-end-indicator">⛔ END 底部邊界（接近請多按 ENTER 往上推）</div>
     <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
     <div class="status-right-box">
       <div class="viewer-badge">
@@ -554,6 +560,7 @@
     const editorContainer = document.getElementById('editorContainer');
     const mirrorDiv = document.getElementById('mirrorDiv');
     const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
+    const endLineMarker = document.getElementById('endLineMarker');
     const wordCount = document.getElementById('wordCount');
     const masterToggleBtn = document.getElementById('masterToggleBtn');
     const modeHintText = document.getElementById('modeHintText');
@@ -602,14 +609,46 @@
         editor.setSelectionRange(curStart, curEnd);
       }
       autoGrowTextarea();
+      updateEndLinePosition();
     }
 
-    // 🌟 完全放開高度限制，保證按 Enter 隨意長高、順暢往下滾動
     function autoGrowTextarea() {
       const minHeight = editorContainer.clientHeight + 400;
       if (editor.scrollHeight > editor.clientHeight || editor.clientHeight < minHeight) {
         editor.style.height = Math.max(editor.scrollHeight, minHeight) + 'px';
       }
+    }
+
+    // 🌟 精確計算輸入欄最後一行的位置，將 END 線錨定在輸入欄底端
+    function updateEndLinePosition() {
+      if (!editor.value) return;
+      const cs = window.getComputedStyle(editor);
+
+      mirrorDiv.style.fontFamily = cs.fontFamily;
+      mirrorDiv.style.fontSize = cs.fontSize;
+      mirrorDiv.style.lineHeight = cs.lineHeight;
+      mirrorDiv.style.letterSpacing = cs.letterSpacing;
+      mirrorDiv.style.wordBreak = cs.wordBreak;
+      mirrorDiv.style.whiteSpace = cs.whiteSpace;
+      mirrorDiv.style.paddingLeft = cs.paddingLeft;
+      mirrorDiv.style.paddingRight = cs.paddingRight;
+      mirrorDiv.style.paddingTop = cs.paddingTop;
+      mirrorDiv.style.width = editor.clientWidth + 'px';
+
+      mirrorDiv.innerHTML = '';
+      mirrorDiv.appendChild(document.createTextNode(editor.value));
+      
+      const bottomProbe = document.createElement('span');
+      bottomProbe.textContent = '\u200b';
+      mirrorDiv.appendChild(bottomProbe);
+
+      const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
+      const fontHeight = parseFloat(cs.fontSize) || 48;
+      const bottomY = (bottomProbe.offsetTop + fontHeight) * scaleVal;
+
+      endLineMarker.style.top = bottomY + 'px';
+      endLineMarker.style.left = (parseFloat(cs.paddingLeft) || 8) + 'px';
+      endLineMarker.style.width = (editor.clientWidth - ((parseFloat(cs.paddingLeft)||8)*2)) + 'px';
     }
 
     socket.on('connect', () => { 
@@ -683,6 +722,7 @@
 
     function triggerFastSync(immediate = false) {
       updateWordCount();
+      updateEndLinePosition();
       if (immediate) {
         clearTimeout(fastSyncTimer);
         sendRealtimeSync();
@@ -749,6 +789,7 @@
           }
           ensureTrailingBuffer();
           updateWordCount();
+          updateEndLinePosition();
           
           if (data.cursor_index !== undefined) {
             updateRemoteCursor(data.sender_sid, data.cursor_index);
@@ -903,8 +944,15 @@
       for (const sid of remoteCursors.keys()) renderSingleRemoteCursor(sid);
     }
 
-    editorContainer.addEventListener('scroll', redrawAllRemoteCursors);
-    window.addEventListener('resize', () => { autoGrowTextarea(); redrawAllRemoteCursors(); });
+    editorContainer.addEventListener('scroll', () => {
+      redrawAllRemoteCursors();
+      updateEndLinePosition();
+    });
+    window.addEventListener('resize', () => { 
+      autoGrowTextarea(); 
+      redrawAllRemoteCursors(); 
+      updateEndLinePosition();
+    });
 
     function applyLocalStyle() {
       const px = padXInput.value + 'px';
@@ -912,7 +960,7 @@
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
       editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      editor.style.padding = `${py} ${px} 160px ${px}`;
+      editor.style.padding = `${py} ${px} 120px ${px}`;
       if ('zoom' in editor.style) {
         editor.style.zoom = scaleVal;
       } else {
@@ -921,6 +969,7 @@
       }
       autoGrowTextarea();
       redrawAllRemoteCursors();
+      updateEndLinePosition();
     }
 
     function applyAndSync() { applyLocalStyle(); triggerFastSync(true); }
