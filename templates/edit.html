@@ -311,7 +311,7 @@
     .status-right-box {
       display: flex;
       align-items: center;
-      gap: 16px;
+      gap: 14px;
     }
     .online-badge {
       display: inline-flex;
@@ -330,6 +330,17 @@
       background: #22c55e;
       display: inline-block;
       box-shadow: 0 0 6px #22c55e;
+    }
+    .viewer-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 9px;
+      background: #172554;
+      border: 1px solid #1e40af;
+      border-radius: 12px;
+      font-size: 12px;
+      color: #bfdbfe;
     }
 
     .export-dropdown { position: relative; display: inline-block; }
@@ -490,6 +501,10 @@
   <div class="statusbar">
     <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
     <div class="status-right-box">
+      <!-- 觀眾在線即時統計徽章 -->
+      <div class="viewer-badge">
+        <span>📺 觀眾在線：</span><strong id="viewerCountText" style="color: #93c5fd;">0</strong><span> 人</span>
+      </div>
       <div class="online-badge">
         <span class="online-dot" id="onlineDot"></span>
         <span id="onlineCountText">連線中...</span>
@@ -520,6 +535,7 @@
     const modeHintText = document.getElementById('modeHintText');
     const onlineDot = document.getElementById('onlineDot');
     const onlineCountText = document.getElementById('onlineCountText');
+    const viewerCountText = document.getElementById('viewerCountText');
     const aiToggleBtn = document.getElementById('aiToggleBtn');
     const aiStreamBar = document.getElementById('aiStreamBar');
     const aiStatusTitle = document.getElementById('aiStatusTitle');
@@ -587,21 +603,26 @@
     });
 
     socket.on('role_status_update', data => {
-      const total = data.total_editors || 1;
+      const totalEditors = data.total_editors || 1;
+      const totalViewers = data.total_viewers || 0;
+      
+      // 更新觀眾統計數值
+      viewerCountText.innerText = totalViewers;
+
       currentMasterSid = data.master_sid;
       amIMaster = (currentMasterSid === socket.id);
 
-      if (total <= 1) {
+      if (totalEditors <= 1) {
         onlineDot.style.background = '#eab308';
         onlineCountText.innerHTML = `👤 僅您在線 (等待夥伴加入...)`;
       } else {
         onlineDot.style.background = '#22c55e';
-        onlineCountText.innerHTML = `👥 協作在線：<strong style="color:#4ade80;">${total}</strong> 人 (您與 ${total - 1} 位夥伴)`;
+        onlineCountText.innerHTML = `👥 協作在線：<strong style="color:#4ade80;">${totalEditors}</strong> 人 (您與 ${totalEditors - 1} 位夥伴)`;
       }
 
       if (amIMaster) {
         masterToggleBtn.className = "btn btn-master-role active";
-        masterToggleBtn.innerText = total <= 1 ? "🔒 主投影 (單人)" : "🔒 主投影 (主控中)";
+        masterToggleBtn.innerText = totalEditors <= 1 ? "🔒 主投影 (單人)" : "🔒 主投影 (主控中)";
         modeHintText.innerText = "身分：【主投影控制台】";
       } else {
         masterToggleBtn.className = "btn btn-master-role inactive";
@@ -784,7 +805,6 @@
       });
     }
 
-    // 🌟 核心防彈跳演算法：鎖定字元邊界，徹底阻斷向下瞬跳
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || !editor.value) return;
@@ -823,7 +843,6 @@
         return;
       }
 
-      // 抓取最後一個字元包入 span，精確取得其實體右側座標
       const preText = fullVal.substring(0, targetCharIdx);
       const targetChar = fullVal.charAt(targetCharIdx);
 
@@ -832,7 +851,6 @@
       charSpan.textContent = targetChar;
       mirrorDiv.appendChild(charSpan);
 
-      // 若剛好按下 Enter 換行，則在下方新行起始處
       if (targetChar === '\n') {
         const nextProbe = document.createElement('span');
         nextProbe.textContent = '\u200b';
@@ -840,7 +858,6 @@
         targetX = nextProbe.offsetLeft;
         targetY = nextProbe.offsetTop;
       } else {
-        // 🌟 直接以最後一個字的「右邊緣」為游標錨點，物理上絕不可能跳到下一行
         targetX = charSpan.offsetLeft + charSpan.offsetWidth;
         targetY = charSpan.offsetTop;
       }
@@ -953,7 +970,7 @@
       downloadBlob(new Blob(["\uFEFF" + wordHtml], { type: 'application/msword;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.doc`);
     }
 
-    // AI 語音收音引擎
+    // AI 語音引擎
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
