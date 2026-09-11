@@ -205,6 +205,7 @@
       z-index: 10;
     }
 
+    /* 測量層精確同步樣式，避免任何排版誤差 */
     #mirrorDiv {
       position: absolute;
       top: 0;
@@ -217,14 +218,14 @@
       text-align: justify;
     }
 
-    /* 🌟 拔除所有 transition 動畫，避免任何位移抖動 */
+    /* 🌟 穩定無閃爍遠端游標：常態實體呈現，無補間跳動 */
     .remote-cursor {
       position: absolute;
       width: 3px;
       pointer-events: none;
       z-index: 50;
-      display: none;
-      transform-origin: top left;
+      display: block;
+      opacity: 1 !important;
       transition: none !important;
     }
     .remote-cursor-tag {
@@ -492,7 +493,7 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... 支援雙人無震顫穩定同步"></textarea>
+      <textarea id="editor" placeholder="在此打字... 支援夥伴平順同步，游標不閃爍"></textarea>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
     </div>
@@ -579,7 +580,6 @@
       autoGrowTextarea();
     }
 
-    // 🌟 修復核心 1：拔除重排重設，只有在高度真正不夠時才單向擴展，徹底消除頁面震動
     function autoGrowTextarea() {
       const minHeight = editorContainer.clientHeight + 400;
       if (editor.scrollHeight > editor.clientHeight || editor.clientHeight < minHeight) {
@@ -705,7 +705,8 @@
           }
           ensureTrailingBuffer();
           updateWordCount();
-          redrawAllRemoteCursors();
+          // 文字同步時，同步更新夥伴游標位置，保持平順
+          requestAnimationFrame(redrawAllRemoteCursors);
           setTimeout(() => { isApplyingRemote = false; }, 10);
         }
       }
@@ -749,6 +750,7 @@
       }
     });
 
+    // 🌟 核心修復：常態存在、零延遲硬就位、完全無抽動
     function updateRemoteCursor(sid, cursorIndex) {
       let item = remoteCursors.get(sid);
       if (!item) {
@@ -758,7 +760,7 @@
         const el = document.createElement('div');
         el.className = 'remote-cursor';
         el.style.backgroundColor = color;
-        el.style.boxShadow = `0 0 8px ${color}`;
+        el.style.boxShadow = `0 0 6px ${color}`;
 
         const tag = document.createElement('div');
         tag.className = 'remote-cursor-tag';
@@ -772,6 +774,7 @@
       } else {
         item.index = cursorIndex;
       }
+
       renderSingleRemoteCursor(sid);
     }
 
@@ -781,16 +784,16 @@
         const color = isTargetMaster ? '#22c55e' : '#38bdf8';
         const label = isTargetMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
         item.element.style.backgroundColor = color;
-        item.element.style.boxShadow = `0 0 8px ${color}`;
+        item.element.style.boxShadow = `0 0 6px ${color}`;
         item.tagElement.style.backgroundColor = color;
         item.tagElement.innerText = label;
       });
     }
 
-    // 🌟 修復核心 2：直接瞬間就位（Zero-latency direct snap），完全沒有補間動畫
+    // 精確排版測量：字到哪、游標就直接跟到哪，如原生打字般穩定
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
-      if (!item || !editor.value) return;
+      if (!item || editor.value === undefined) return;
 
       const el = item.element;
       const targetIndex = Math.min(Math.max(item.index, 0), editor.value.length);
@@ -819,11 +822,11 @@
 
       const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
+      
       el.style.left = probe.offsetLeft + 'px';
       el.style.top = probe.offsetTop + 'px';
       el.style.height = fontHeight + 'px';
       el.style.zoom = scaleVal;
-      el.style.display = 'block';
     }
 
     function redrawAllRemoteCursors() {
