@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>即時字幕 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     * { 
       box-sizing: border-box; 
@@ -24,6 +25,7 @@
       scrollbar-width: none;
     }
     body::-webkit-scrollbar { display: none; }
+    
     #captionContent {
       width: 100%;
       min-height: 100vh;
@@ -36,23 +38,25 @@
       transform-origin: top left;
       cursor: default;
     }
+
     .top-hover-sensor {
       position: fixed;
       top: 0;
       right: 0;
-      width: 180px;
+      width: 160px;
       height: 70px;
       z-index: 1000;
     }
+
     .hover-info-badge {
       position: fixed;
       top: 12px;
       right: 12px;
-      background: rgba(20, 20, 20, 0.92);
+      background: rgba(20, 20, 20, 0.94);
       border: 1px solid rgba(255, 255, 255, 0.2);
-      backdrop-filter: blur(8px);
-      padding: 8px 14px;
-      border-radius: 8px;
+      backdrop-filter: blur(10px);
+      padding: 14px;
+      border-radius: 12px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
       font-size: 13px;
       color: #e2e8f0;
@@ -61,13 +65,18 @@
       transform: translateY(-8px);
       transition: opacity 0.25s ease, transform 0.25s ease;
       z-index: 999;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+      text-align: center;
     }
+
     .top-hover-sensor:hover + .hover-info-badge,
-    .hover-info-badge:hover {
+    .hover-info-badge:hover,
+    .hover-info-badge.show-fixed {
       opacity: 1;
       pointer-events: auto;
       transform: translateY(0);
     }
+
     .status-dot {
       display: inline-block;
       width: 8px;
@@ -76,6 +85,22 @@
       background: #22c55e;
       margin-right: 6px;
     }
+    
+    #viewQrBox {
+      background: #fff;
+      padding: 6px;
+      border-radius: 8px;
+      display: inline-block;
+      margin: 8px 0;
+    }
+
+    .badge-url {
+      font-size: 11px;
+      color: #38bdf8;
+      word-break: break-all;
+      max-width: 150px;
+    }
+
     .audience-zoom-pill {
       position: fixed;
       bottom: 20px;
@@ -100,6 +125,7 @@
       pointer-events: auto;
       transform: translateY(0);
     }
+
     .zoom-btn {
       background: #3f3f46;
       border: none;
@@ -125,10 +151,12 @@
   </style>
 </head>
 <body>
+
   <div class="top-hover-sensor" id="hoverSensor"></div>
   <div class="hover-info-badge" id="infoBadge">
     <div><span class="status-dot" id="netDot"></span><strong>頻道 {{ room_id }} 觀眾看版</strong></div>
-    <div style="font-size: 11px; color: #94a3b8; margin-top: 3px;" id="liveUrl"></div>
+    <div id="viewQrBox"></div>
+    <div class="badge-url" id="liveUrl"></div>
   </div>
 
   <div id="captionContent"></div>
@@ -146,7 +174,19 @@
     const netDot = document.getElementById('netDot');
     const zoomPill = document.getElementById('zoomPill');
     const zoomValText = document.getElementById('zoomValText');
-    document.getElementById('liveUrl').innerText = window.location.href;
+    const infoBadge = document.getElementById('infoBadge');
+
+    const liveUrlStr = window.location.href;
+    document.getElementById('liveUrl').innerText = liveUrlStr;
+
+    new QRCode(document.getElementById('viewQrBox'), {
+      text: liveUrlStr,
+      width: 110,
+      height: 110,
+      colorDark : "#0f172a",
+      colorLight : "#ffffff",
+      correctLevel : QRCode.CorrectLevel.M
+    });
 
     let masterBaseScale = 100;
     let personalZoom = 100;
@@ -158,23 +198,35 @@
     socket.on('connect', () => { netDot.style.background = '#22c55e'; });
     socket.on('disconnect', () => { netDot.style.background = '#ef4444'; });
 
-    socket.on('sync_text', data => {
+    // 初次載入
+    socket.on('init_document', data => {
       if (!data) return;
-      const displayText = data.clean_text !== undefined ? data.clean_text : data.text;
-      if (typeof displayText === 'string') {
-        box.innerText = displayText;
+      box.innerText = (data.text || '').trimEnd();
+      if (data.settings) updateStyle(data.settings);
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    });
+
+    // 即時更新
+    socket.on('doc_updated', data => {
+      if (!data) return;
+      if (typeof data.text === 'string') {
+        box.innerText = data.text.trimEnd();
         window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
       }
+      if (data.settings) updateStyle(data.settings);
+    });
+
+    function updateStyle(s) {
       box.style.fontFamily = '"DFKai-SB", "BiauKai", "標楷體", "TW-Kai", serif';
-      if (data.size) box.style.fontSize = data.size + 'px';
-      if (data.pad_x !== undefined && data.pad_y !== undefined) {
-        box.style.padding = `${data.pad_y}px ${data.pad_x}px 70px ${data.pad_x}px`;
+      if (s.size) box.style.fontSize = s.size + 'px';
+      if (s.pad_x !== undefined && s.pad_y !== undefined) {
+        box.style.padding = `${s.pad_y}px ${s.pad_x}px 70px ${s.pad_x}px`;
       }
-      if (data.scale !== undefined) {
-        masterBaseScale = data.scale;
+      if (s.scale !== undefined) {
+        masterBaseScale = s.scale;
         applyCombinedScale();
       }
-    });
+    }
 
     function applyCombinedScale() {
       const finalPercent = Math.round((masterBaseScale * personalZoom) / 100);
@@ -205,13 +257,22 @@
       pillTimer = setTimeout(() => { zoomPill.classList.remove('visible'); }, 3500);
     }
 
-    document.addEventListener('click', (e) => { if (!zoomPill.contains(e.target)) showPillTemporarily(); });
-    document.addEventListener('touchstart', (e) => { if (!zoomPill.contains(e.target)) showPillTemporarily(); }, { passive: true });
+    document.addEventListener('click', (e) => { 
+      if (!zoomPill.contains(e.target) && !infoBadge.contains(e.target)) {
+        showPillTemporarily();
+      }
+    });
+
+    document.getElementById('hoverSensor').addEventListener('touchstart', () => {
+      infoBadge.classList.add('show-fixed');
+      setTimeout(() => infoBadge.classList.remove('show-fixed'), 4000);
+    }, { passive: true });
+
     zoomPill.addEventListener('click', (e) => e.stopPropagation());
     zoomPill.addEventListener('dblclick', (e) => { e.stopPropagation(); e.preventDefault(); });
 
     document.addEventListener('dblclick', (e) => {
-      if (zoomPill.contains(e.target) || e.target.closest('#zoomPill')) return;
+      if (zoomPill.contains(e.target) || infoBadge.contains(e.target)) return;
       if (window.getSelection) window.getSelection().removeAllRanges();
       if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
       else if (document.exitFullscreen) document.exitFullscreen();
