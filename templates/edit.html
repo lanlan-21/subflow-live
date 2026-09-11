@@ -215,9 +215,10 @@
       white-space: pre-wrap;
       word-break: break-all;
       text-align: justify;
+      box-sizing: border-box;
     }
 
-    /* 🌟 零延遲、絕不垂直彈跳的實體游標 */
+    /* 🌟 靜態穩定游標：零補間、不抖動 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -616,13 +617,12 @@
       socket.emit('claim_master', { room: roomId });
     }
 
+    // 🌟 核心改進 1：中文選字中鎖定游標，絕不廣播中間破圖態
     editor.addEventListener('compositionstart', () => { isComposing = true; });
-    editor.addEventListener('compositionupdate', () => { triggerFastSync(); broadcastCursorImmediately(); });
     editor.addEventListener('compositionend', () => {
       isComposing = false;
       ensureTrailingBuffer();
       triggerFastSync(true);
-      broadcastCursorImmediately();
     });
 
     editor.addEventListener('input', () => {
@@ -633,7 +633,6 @@
     });
 
     function triggerFastSync(immediate = false) {
-      broadcastCursorImmediately();
       updateWordCount();
       if (immediate) {
         clearTimeout(fastSyncTimer);
@@ -644,17 +643,21 @@
       fastSyncTimer = setTimeout(sendRealtimeSync, 30);
     }
 
+    // 🌟 核心改進 2：文字與游標同一包送出，消除不同步繞圈
     function sendRealtimeSync() {
       const currentText = editor.value;
       const patchList = dmp.patch_make(shadowText, currentText);
       const patchText = dmp.patch_toText(patchList);
       shadowText = currentText;
 
+      const myCursor = editor.selectionStart;
+
       socket.emit('sync_text', {
         room: roomId,
         text: currentText,
         clean_text: currentText.trimEnd(),
         patch: patchText,
+        cursor_index: myCursor,
         size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
         scale: parseInt(scaleInput.value, 10) || 100,
         pad_x: parseInt(padXInput.value, 10) || 8,
@@ -662,6 +665,7 @@
       });
     }
 
+    // 🌟 接收同步：在同一幀直接鎖定文字與游標
     socket.on('sync_text', data => {
       if (!data || data.sender_sid === socket.id) return;
       if (typeof data.text === 'string') {
@@ -698,8 +702,14 @@
           }
           ensureTrailingBuffer();
           updateWordCount();
-          redrawAllRemoteCursors();
+          
+          // 文字更動時直接精準定位游標，不再二次抽動
+          if (data.cursor_index !== undefined) {
+            updateRemoteCursor(data.sender_sid, data.cursor_index);
+          }
           setTimeout(() => { isApplyingRemote = false; }, 10);
+        } else if (data.cursor_index !== undefined) {
+          updateRemoteCursor(data.sender_sid, data.cursor_index);
         }
       }
       if (!amIMaster && data.is_master) {
@@ -711,17 +721,17 @@
       }
     });
 
-    editor.addEventListener('click', broadcastCursorImmediately);
-    editor.addEventListener('keyup', broadcastCursorImmediately);
-    editor.addEventListener('keydown', () => setTimeout(broadcastCursorImmediately, 0));
-    editor.addEventListener('focus', broadcastCursorImmediately);
-    document.addEventListener('selectionchange', () => {
-      if (document.activeElement === editor) broadcastCursorImmediately();
+    // 純移動游標（點擊、方向鍵）時廣播
+    editor.addEventListener('click', broadcastCursorOnly);
+    editor.addEventListener('keyup', (e) => {
+      if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)) {
+        broadcastCursorOnly();
+      }
     });
 
     let lastSentCursor = -1;
-    function broadcastCursorImmediately() {
-      if (isApplyingRemote) return;
+    function broadcastCursorOnly() {
+      if (isApplyingRemote || isComposing) return;
       const pos = editor.selectionStart;
       if (pos !== lastSentCursor) {
         lastSentCursor = pos;
@@ -760,7 +770,7 @@
 
         el.appendChild(tag);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag, stableY: 0, lastLineIdx: -1 };
+        item = { index: cursorIndex, element: el, tagElement: tag };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
@@ -780,7 +790,7 @@
       });
     }
 
-    // 🌟 核心防彈跳測量演算法：凍結 Y 軸瞬發下墜
+    // 🌟 核心防墜落幾何測量：徹底阻斷向下彈跳
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || !editor.value) return;
@@ -801,39 +811,25 @@
       mirrorDiv.style.width = editor.clientWidth + 'px';
 
       const beforeText = editor.value.substring(0, targetIndex);
-      const afterText = editor.value.substring(targetIndex);
-
+      
+      // 🌟 使用帶有行高幾何屬性的穩定錨點，完全杜絕折行墜落
       mirrorDiv.innerHTML = '';
       mirrorDiv.appendChild(document.createTextNode(beforeText));
       
-      // 🌟 改用無寬度實體邊界探針（避免換行折射瞬跳）
       const probe = document.createElement('span');
-      probe.style.display = 'inline-block';
-      probe.style.width = '0px';
-      probe.style.height = cs.fontSize;
-      probe.style.verticalAlign = 'baseline';
-      probe.textContent = '';
+      probe.textContent = '|';
+      probe.style.display = 'inline';
+      probe.style.visibility = 'hidden';
       mirrorDiv.appendChild(probe);
-      mirrorDiv.appendChild(document.createTextNode(afterText));
 
       const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       
-      const rawX = probe.offsetLeft;
-      let rawY = probe.offsetTop;
+      const probeLeft = probe.offsetLeft;
+      const probeTop = probe.offsetTop;
 
-      // 🌟 Y 軸基準線防抖判定：
-      // 如果 X 座標在行尾且此時並無按下換行符號，防止瀏覽器在排版瞬間誤判掉到下一行
-      const lastChar = beforeText.slice(-1);
-      if (rawX === 0 && targetIndex > 0 && lastChar !== '\n') {
-        // 若瞬跳到第 0 列但沒敲換行，維持上一刻的穩定高度
-        if (item.stableY > 0) rawY = item.stableY;
-      } else {
-        item.stableY = rawY;
-      }
-
-      el.style.left = rawX + 'px';
-      el.style.top = rawY + 'px';
+      el.style.left = probeLeft + 'px';
+      el.style.top = probeTop + 'px';
       el.style.height = fontHeight + 'px';
       el.style.zoom = scaleVal;
       el.style.display = 'block';
