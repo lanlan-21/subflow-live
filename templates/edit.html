@@ -218,7 +218,6 @@
       box-sizing: border-box;
     }
 
-    /* 🌟 靜態穩定游標：零補間、不抖動 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -617,7 +616,6 @@
       socket.emit('claim_master', { room: roomId });
     }
 
-    // 🌟 核心改進 1：中文選字中鎖定游標，絕不廣播中間破圖態
     editor.addEventListener('compositionstart', () => { isComposing = true; });
     editor.addEventListener('compositionend', () => {
       isComposing = false;
@@ -643,7 +641,6 @@
       fastSyncTimer = setTimeout(sendRealtimeSync, 30);
     }
 
-    // 🌟 核心改進 2：文字與游標同一包送出，消除不同步繞圈
     function sendRealtimeSync() {
       const currentText = editor.value;
       const patchList = dmp.patch_make(shadowText, currentText);
@@ -665,7 +662,6 @@
       });
     }
 
-    // 🌟 接收同步：在同一幀直接鎖定文字與游標
     socket.on('sync_text', data => {
       if (!data || data.sender_sid === socket.id) return;
       if (typeof data.text === 'string') {
@@ -703,7 +699,6 @@
           ensureTrailingBuffer();
           updateWordCount();
           
-          // 文字更動時直接精準定位游標，不再二次抽動
           if (data.cursor_index !== undefined) {
             updateRemoteCursor(data.sender_sid, data.cursor_index);
           }
@@ -721,7 +716,6 @@
       }
     });
 
-    // 純移動游標（點擊、方向鍵）時廣播
     editor.addEventListener('click', broadcastCursorOnly);
     editor.addEventListener('keyup', (e) => {
       if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)) {
@@ -790,7 +784,7 @@
       });
     }
 
-    // 🌟 核心防墜落幾何測量：徹底阻斷向下彈跳
+    // 🌟 核心防彈跳演算法：鎖定字元邊界，徹底阻斷向下瞬跳
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || !editor.value) return;
@@ -810,26 +804,49 @@
       mirrorDiv.style.paddingTop = cs.paddingTop;
       mirrorDiv.style.width = editor.clientWidth + 'px';
 
-      const beforeText = editor.value.substring(0, targetIndex);
+      const fullVal = editor.value;
+      const targetCharIdx = Math.max(0, targetIndex - 1);
       
-      // 🌟 使用帶有行高幾何屬性的穩定錨點，完全杜絕折行墜落
       mirrorDiv.innerHTML = '';
-      mirrorDiv.appendChild(document.createTextNode(beforeText));
-      
-      const probe = document.createElement('span');
-      probe.textContent = '|';
-      probe.style.display = 'inline';
-      probe.style.visibility = 'hidden';
-      mirrorDiv.appendChild(probe);
 
+      let targetX = parseFloat(cs.paddingLeft) || 8;
+      let targetY = parseFloat(cs.paddingTop) || 16;
       const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
-      
-      const probeLeft = probe.offsetLeft;
-      const probeTop = probe.offsetTop;
 
-      el.style.left = probeLeft + 'px';
-      el.style.top = probeTop + 'px';
+      if (targetIndex === 0) {
+        el.style.left = targetX + 'px';
+        el.style.top = targetY + 'px';
+        el.style.height = fontHeight + 'px';
+        el.style.zoom = scaleVal;
+        el.style.display = 'block';
+        return;
+      }
+
+      // 抓取最後一個字元包入 span，精確取得其實體右側座標
+      const preText = fullVal.substring(0, targetCharIdx);
+      const targetChar = fullVal.charAt(targetCharIdx);
+
+      mirrorDiv.appendChild(document.createTextNode(preText));
+      const charSpan = document.createElement('span');
+      charSpan.textContent = targetChar;
+      mirrorDiv.appendChild(charSpan);
+
+      // 若剛好按下 Enter 換行，則在下方新行起始處
+      if (targetChar === '\n') {
+        const nextProbe = document.createElement('span');
+        nextProbe.textContent = '\u200b';
+        mirrorDiv.appendChild(nextProbe);
+        targetX = nextProbe.offsetLeft;
+        targetY = nextProbe.offsetTop;
+      } else {
+        // 🌟 直接以最後一個字的「右邊緣」為游標錨點，物理上絕不可能跳到下一行
+        targetX = charSpan.offsetLeft + charSpan.offsetWidth;
+        targetY = charSpan.offsetTop;
+      }
+
+      el.style.left = targetX + 'px';
+      el.style.top = targetY + 'px';
       el.style.height = fontHeight + 'px';
       el.style.zoom = scaleVal;
       el.style.display = 'block';
@@ -936,7 +953,7 @@
       downloadBlob(new Blob(["\uFEFF" + wordHtml], { type: 'application/msword;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.doc`);
     }
 
-    // AI 語音引擎
+    // AI 語音收音引擎
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
