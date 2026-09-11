@@ -181,12 +181,12 @@
       overflow-x: hidden;
     }
 
+    /* 🌟 Google Docs 原生架構：使用 contenteditable 呈現真實排版幾何 */
     #editor {
       width: 100%;
       min-height: 100%;
       border: none;
       outline: none;
-      resize: none;
       padding: 16px 8px 120px 8px;
       font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
       font-size: 48px;
@@ -199,24 +199,44 @@
       word-break: break-all;
       text-align: justify;
       transform-origin: top left;
-      overflow: hidden;
-      display: block;
       position: relative;
       z-index: 10;
     }
 
-    /* 🌟 行級協作指示器（不晃動、不跳格） */
-    .partner-indicator-bar {
-      position: absolute;
-      left: 2px;
-      width: 4px;
-      background: #38bdf8;
-      border-radius: 2px;
-      box-shadow: 0 0 8px #38bdf8;
-      z-index: 20;
+    #editor:empty:before {
+      content: attr(data-placeholder);
+      color: #52525b;
       pointer-events: none;
-      transition: top 0.15s ease-out;
+    }
+
+    /* 🌟 Google Docs 級別遠端游標 */
+    .remote-cursor {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 3px;
+      pointer-events: none;
+      z-index: 50;
+      opacity: 1;
+      will-change: transform;
+      /* 僅在打字微位移時給予極細膩平滑推移，停滯時不震顫 */
+      transition: transform 0.05s ease-out;
       display: none;
+    }
+    
+    .remote-cursor-tag {
+      position: absolute;
+      top: -24px;
+      left: -2px;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 3px;
+      white-space: nowrap;
+      user-select: none;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+      pointer-events: none;
     }
 
     #aiStreamBar {
@@ -391,7 +411,6 @@
       </div>
     </div>
 
-    <!-- 字號 -->
     <div class="control-group">
       <label for="fontSizeInput">字號：</label>
       <input type="number" id="fontSizeInput" class="size-input" value="48" min="12" max="140" step="2" onchange="applyAndSync()">
@@ -399,7 +418,6 @@
       <button class="btn-step" onclick="stepSize(-2)">A⁻</button>
     </div>
 
-    <!-- 觀看比例 -->
     <div class="control-group">
       <label for="scaleInput">比例：</label>
       <input type="number" id="scaleInput" class="size-input" value="100" min="40" max="250" step="5" onchange="applyAndSync()">%
@@ -407,7 +425,6 @@
       <button class="btn-step" onclick="stepScale(-5)">-5%</button>
     </div>
 
-    <!-- 左右邊距 -->
     <div class="control-group">
       <label for="padXInput">左右：</label>
       <input type="number" id="padXInput" class="size-input" value="8" min="0" max="200" step="2" onchange="applyAndSync()">px
@@ -415,7 +432,6 @@
       <button class="btn-step" onclick="stepPadX(-2)">-2</button>
     </div>
 
-    <!-- 上下邊距 -->
     <div class="control-group">
       <label for="padYInput">上下：</label>
       <input type="number" id="padYInput" class="size-input" value="10" min="0" max="150" step="2" onchange="applyAndSync()">px
@@ -454,8 +470,9 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <div id="partnerIndicator" class="partner-indicator-bar" title="夥伴正在此行編輯"></div>
-      <textarea id="editor" placeholder="在此打字... 支援多人即時共同協作，後登入自動載入"></textarea>
+      <!-- 🌟 原生純文字富文本容器：支援精準字元座標捕獲 -->
+      <div id="editor" contenteditable="plaintext-only" data-placeholder="在此打字... 支援 Google Docs 級別精準游標吸附與同步"></div>
+      <div id="remoteCursorsContainer"></div>
     </div>
     
     <button class="btn" id="exitFsBtn" onclick="toggleFullscreen()">✕ 退出全螢幕 (ESC)</button>
@@ -493,7 +510,7 @@
     const roomId = "{{ room_id }}";
     const editor = document.getElementById('editor');
     const editorContainer = document.getElementById('editorContainer');
-    const partnerIndicator = document.getElementById('partnerIndicator');
+    const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
     const wordCount = document.getElementById('wordCount');
     const masterToggleBtn = document.getElementById('masterToggleBtn');
     const modeHintText = document.getElementById('modeHintText');
@@ -514,46 +531,122 @@
     let fastSyncTimer = null;
     let isApplyingRemote = false;
 
+    const remoteCursors = new Map();
     const dmp = new diff_match_patch();
     let shadowText = "";
-    const BUFFER_LINES_COUNT = 6;
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
-    function ensureTrailingBuffer() {
-      let val = editor.value;
-      let count = 0;
-      for (let i = val.length - 1; i >= 0; i--) {
-        if (val[i] === '\n') count++;
-        else break;
-      }
-      if (count < BUFFER_LINES_COUNT) {
-        const curStart = editor.selectionStart;
-        const curEnd = editor.selectionEnd;
-        editor.value = val + '\n'.repeat(BUFFER_LINES_COUNT - count);
-        editor.setSelectionRange(curStart, curEnd);
-      }
-      autoGrowTextarea();
+    function getEditorText() {
+      return editor.innerText.replace(/\r\n/g, '\n');
     }
 
-    function autoGrowTextarea() {
-      const minHeight = editorContainer.clientHeight + 400;
-      if (editor.scrollHeight > editor.clientHeight || editor.clientHeight < minHeight) {
-        editor.style.height = Math.max(editor.scrollHeight, minHeight) + 'px';
-      }
+    function setEditorText(text) {
+      editor.innerText = text;
     }
 
-    // 1. 連線並發送身分
+    // 🌟 原生 Range 幾何抓取：精準取得字元索引游標的螢幕像素位置
+    function getCursorOffsetFromDOM() {
+      const sel = window.getSelection();
+      if (!sel.rangeCount) return 0;
+      const range = sel.getRangeAt(0);
+      const preCaretRange = range.cloneRange();
+      preCaretRange.selectNodeContents(editor);
+      preCaretRange.setEnd(range.endContainer, range.endOffset);
+      return preCaretRange.toString().length;
+    }
+
+    function setDOMCursorOffset(offset) {
+      let charCount = 0;
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.setStart(editor, 0);
+      range.collapse(true);
+
+      const nodeStack = [editor];
+      let node, found = false;
+
+      while (!found && (node = nodeStack.pop())) {
+        if (node.nodeType === 3) {
+          const nextCharCount = charCount + node.length;
+          if (offset >= charCount && offset <= nextCharCount) {
+            range.setStart(node, offset - charCount);
+            range.collapse(true);
+            found = true;
+          }
+          charCount = nextCharCount;
+        } else {
+          let i = node.childNodes.length;
+          while (i--) {
+            nodeStack.push(node.childNodes[i]);
+          }
+        }
+      }
+
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+
+    // 🌟 核心：直接向瀏覽器詢問字元在螢幕上的精準邊界 Rect
+    function getAbsoluteCoordsAtOffset(offset) {
+      let charCount = 0;
+      const range = document.createRange();
+      const nodeStack = [editor];
+      let node, found = false;
+
+      while (!found && (node = nodeStack.pop())) {
+        if (node.nodeType === 3) {
+          const nextCharCount = charCount + node.length;
+          if (offset >= charCount && offset <= nextCharCount) {
+            range.setStart(node, Math.max(0, offset - charCount));
+            range.collapse(true);
+            found = true;
+          }
+          charCount = nextCharCount;
+        } else {
+          let i = node.childNodes.length;
+          while (i--) {
+            nodeStack.push(node.childNodes[i]);
+          }
+        }
+      }
+
+      if (!found) {
+        range.selectNodeContents(editor);
+        range.collapse(false);
+      }
+
+      const rects = range.getClientRects();
+      const containerRect = editorContainer.getBoundingClientRect();
+      const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
+
+      if (rects.length > 0) {
+        const r = rects[0];
+        return {
+          x: (r.left - containerRect.left + editorContainer.scrollLeft) / scaleVal,
+          y: (r.top - containerRect.top + editorContainer.scrollTop) / scaleVal,
+          height: r.height / scaleVal
+        };
+      }
+
+      // 空白時的預設位置
+      const cs = window.getComputedStyle(editor);
+      return {
+        x: parseFloat(cs.paddingLeft) || 8,
+        y: parseFloat(cs.paddingTop) || 16,
+        height: parseFloat(cs.fontSize) || 48
+      };
+    }
+
+    // 連線與初始化載入
     socket.on('connect', () => {
       socket.emit('join', { room: roomId, is_editor: true });
     });
 
-    // 🌟 2. Google Docs 關鍵：後登入者初次載入全域文件
     socket.on('init_document', data => {
       if (!data) return;
       isApplyingRemote = true;
-      editor.value = data.text || '';
-      shadowText = editor.value;
-      ensureTrailingBuffer();
+      setEditorText(data.text || '');
+      shadowText = getEditorText();
       updateWordCount();
 
       if (data.settings) {
@@ -588,6 +681,7 @@
         masterToggleBtn.innerText = "👑 點擊接管主投影";
         modeHintText.innerText = "身分：【個人檢視】自由縮放，不影響投影幕";
       }
+      updateAllCursorTags();
     });
 
     function requestMasterRole() {
@@ -595,21 +689,17 @@
       socket.emit('claim_master', { room: roomId });
     }
 
-    // 輸入監聽
+    // 打字與編輯事件
     editor.addEventListener('compositionstart', () => { isComposing = true; });
     editor.addEventListener('compositionupdate', () => { triggerFastSync(); broadcastCursor(); });
     editor.addEventListener('compositionend', () => {
       isComposing = false;
-      ensureTrailingBuffer();
       triggerFastSync(true);
       broadcastCursor();
     });
 
     editor.addEventListener('input', () => {
-      if (!isApplyingRemote) {
-        ensureTrailingBuffer();
-        triggerFastSync();
-      }
+      if (!isApplyingRemote) triggerFastSync();
     });
 
     function triggerFastSync(immediate = false) {
@@ -621,12 +711,11 @@
         return;
       }
       clearTimeout(fastSyncTimer);
-      fastSyncTimer = setTimeout(sendPatchSync, 40);
+      fastSyncTimer = setTimeout(sendPatchSync, 30);
     }
 
-    // 🌟 發送補丁至後端權威合併
     function sendPatchSync() {
-      const currentText = editor.value;
+      const currentText = getEditorText();
       const patchList = dmp.patch_make(shadowText, currentText);
       const patchText = dmp.patch_toText(patchList);
       shadowText = currentText;
@@ -644,28 +733,26 @@
       });
     }
 
-    // 🌟 接收來自後端的權威更新，智慧融合本地游標
     socket.on('doc_updated', data => {
       if (!data || data.sender_sid === socket.id) return;
       
-      const curPos = editor.selectionStart;
-      const oldText = editor.value;
+      const curOffset = getCursorOffsetFromDOM();
+      const oldText = getEditorText();
       isApplyingRemote = true;
 
       let merged = false;
       if (data.patch && data.patch.trim()) {
         try {
           const patches = dmp.patch_fromText(data.patch);
-          let offset = 0;
+          let offsetDelta = 0;
           for (let p of patches) {
-            if (p.start1 < curPos) offset += (p.length2 - p.length1);
+            if (p.start1 < curOffset) offsetDelta += (p.length2 - p.length1);
           }
           const results = dmp.patch_apply(patches, oldText);
           if (results[1].some(ok => ok)) {
-            editor.value = results[0];
+            setEditorText(results[0]);
             shadowText = results[0];
-            const nextPos = Math.max(0, Math.min(curPos + offset, editor.value.length));
-            if (!isComposing) editor.setSelectionRange(nextPos, nextPos);
+            if (!isComposing) setDOMCursorOffset(Math.max(0, curOffset + offsetDelta));
             merged = true;
           }
         } catch(e) {}
@@ -673,16 +760,13 @@
 
       if (!merged && data.text !== undefined) {
         const diff = data.text.length - oldText.length;
-        editor.value = data.text;
+        setEditorText(data.text);
         shadowText = data.text;
-        if (!isComposing) {
-          const nextPos = Math.max(0, Math.min(curPos + diff, data.text.length));
-          editor.setSelectionRange(nextPos, nextPos);
-        }
+        if (!isComposing) setDOMCursorOffset(Math.max(0, curOffset + diff));
       }
 
-      ensureTrailingBuffer();
       updateWordCount();
+      redrawAllRemoteCursors();
 
       if (!amIMaster && data.is_master && data.settings) {
         if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
@@ -695,42 +779,92 @@
       setTimeout(() => { isApplyingRemote = false; }, 10);
     });
 
-    // 🌟 游標行級指示器（零震動，清楚知道夥伴在哪一行）
+    // 游標偵測
     editor.addEventListener('click', broadcastCursor);
     editor.addEventListener('keyup', broadcastCursor);
     editor.addEventListener('focus', broadcastCursor);
 
+    let lastSentOffset = -1;
     function broadcastCursor() {
       if (isApplyingRemote) return;
-      const pos = editor.selectionStart;
-      socket.emit('cursor_move', { room: roomId, cursor_index: pos });
+      const offset = getCursorOffsetFromDOM();
+      if (offset !== lastSentOffset) {
+        lastSentOffset = offset;
+        socket.emit('cursor_move', { room: roomId, cursor_index: offset });
+      }
     }
 
     socket.on('cursor_update', data => {
-      if (!data || data.sid === socket.id) return;
-      renderPartnerLine(data.cursor_index);
+      if (!data || !data.sid || data.sid === socket.id) return;
+      updateRemoteCursor(data.sid, data.cursor_index);
     });
 
-    socket.on('cursor_remove', () => {
-      partnerIndicator.style.display = 'none';
+    socket.on('cursor_remove', data => {
+      if (data && data.sid && remoteCursors.has(data.sid)) {
+        const item = remoteCursors.get(data.sid);
+        if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
+        remoteCursors.delete(data.sid);
+      }
     });
 
-    function renderPartnerLine(cursorIndex) {
-      if (!editor.value) return;
-      const textBefore = editor.value.substring(0, cursorIndex);
-      const lineNumber = textBefore.split('\n').length - 1;
+    function updateRemoteCursor(sid, cursorIndex) {
+      let item = remoteCursors.get(sid);
+      if (!item) {
+        const isTargetMaster = (sid === currentMasterSid);
+        const color = isTargetMaster ? '#22c55e' : '#38bdf8';
+        const label = isTargetMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
+        const el = document.createElement('div');
+        el.className = 'remote-cursor';
+        el.style.backgroundColor = color;
+        el.style.boxShadow = `0 0 6px ${color}`;
 
-      const cs = window.getComputedStyle(editor);
-      const fontSize = parseFloat(cs.fontSize) || 48;
-      const lineHeight = fontSize * 1.1;
-      const paddingTop = parseFloat(cs.paddingTop) || 16;
+        const tag = document.createElement('div');
+        tag.className = 'remote-cursor-tag';
+        tag.style.backgroundColor = color;
+        tag.innerText = label;
+
+        el.appendChild(tag);
+        remoteCursorsContainer.appendChild(el);
+        item = { index: cursorIndex, element: el, tagElement: tag };
+        remoteCursors.set(sid, item);
+      } else {
+        item.index = cursorIndex;
+      }
+      renderSingleRemoteCursor(sid);
+    }
+
+    function updateAllCursorTags() {
+      remoteCursors.forEach((item, sid) => {
+        const isTargetMaster = (sid === currentMasterSid);
+        const color = isTargetMaster ? '#22c55e' : '#38bdf8';
+        const label = isTargetMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
+        item.element.style.backgroundColor = color;
+        item.element.style.boxShadow = `0 0 6px ${color}`;
+        item.tagElement.style.backgroundColor = color;
+        item.tagElement.innerText = label;
+      });
+    }
+
+    // 🌟 Google Docs 幾何定位：使用真實像素座標推移，不發抖
+    function renderSingleRemoteCursor(sid) {
+      const item = remoteCursors.get(sid);
+      if (!item) return;
+
+      const coords = getAbsoluteCoordsAtOffset(item.index);
+      const el = item.element;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
-      const topPos = (paddingTop + (lineNumber * lineHeight)) * scaleVal;
-      partnerIndicator.style.top = topPos + 'px';
-      partnerIndicator.style.height = (lineHeight * scaleVal) + 'px';
-      partnerIndicator.style.display = 'block';
+      el.style.height = (coords.height || 48) + 'px';
+      el.style.transform = `translate3d(${coords.x * scaleVal}px, ${coords.y * scaleVal}px, 0)`;
+      el.style.display = 'block';
     }
+
+    function redrawAllRemoteCursors() {
+      for (const sid of remoteCursors.keys()) renderSingleRemoteCursor(sid);
+    }
+
+    editorContainer.addEventListener('scroll', redrawAllRemoteCursors);
+    window.addEventListener('resize', redrawAllRemoteCursors);
 
     function applyLocalStyle() {
       const px = padXInput.value + 'px';
@@ -745,7 +879,7 @@
         editor.style.transform = `scale(${scaleVal})`;
         editor.style.width = `${100 / scaleVal}%`;
       }
-      autoGrowTextarea();
+      redrawAllRemoteCursors();
     }
 
     function applyAndSync() { applyLocalStyle(); triggerFastSync(true); }
@@ -758,7 +892,7 @@
       input.value = Math.min(Math.max(val, 12), 140);
       applyAndSync();
     }
-    function updateWordCount() { wordCount.innerText = editor.value.replace(/\s/g, '').length; }
+    function updateWordCount() { wordCount.innerText = getEditorText().replace(/\s/g, '').length; }
     function openAudienceView() { window.open('/view/' + roomId, 'AudienceView_' + roomId, 'width=1000,height=700'); }
     function copyLink() { navigator.clipboard.writeText(window.location.href).then(() => alert('已複製【後台共筆連結】！')); }
     function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
@@ -809,7 +943,7 @@
       URL.revokeObjectURL(a.href);
     }
     function exportTxt(withHeader = false) {
-      const text = editor.value.trimEnd();
+      const text = getEditorText().trimEnd();
       if (!text.trim()) { alert('目前尚無內容！'); return; }
       let content = text;
       if (withHeader) {
@@ -818,14 +952,14 @@
       downloadBlob(new Blob(["\uFEFF" + content], { type: 'text/plain;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.txt`);
     }
     function exportDoc() {
-      const text = editor.value.trimEnd();
+      const text = getEditorText().trimEnd();
       if (!text.trim()) { alert('目前尚無內容！'); return; }
       const formattedHtml = text.split('\n').map(p => `<p style="margin:0 0 8px 0;line-height:1.2;">${p||'&nbsp;'}</p>`).join('');
       const wordHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>聽打逐字稿</title><style>body{font-family:"標楷體",serif;font-size:14pt;line-height:1.2;}</style></head><body>${formattedHtml}</body></html>`;
       downloadBlob(new Blob(["\uFEFF" + wordHtml], { type: 'application/msword;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.doc`);
     }
 
-    // AI 增量語音引擎
+    // AI 語音收音引擎
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
@@ -960,25 +1094,22 @@
 
     function appendDeltaDirectly(deltaText) {
       if (!deltaText) return;
-      const userCurStart = editor.selectionStart;
-      const userCurEnd = editor.selectionEnd;
-      let val = editor.value;
+      const curOffset = getCursorOffsetFromDOM();
+      let val = getEditorText();
       let realEnd = val.trimEnd().length;
 
       let existing = val.slice(0, realEnd);
       let nextText = existing + deltaText;
-      editor.value = nextText + '\n'.repeat(BUFFER_LINES_COUNT);
+      setEditorText(nextText + '\n\n\n');
 
-      if (userCurStart < realEnd) {
-        editor.setSelectionRange(userCurStart, userCurEnd);
+      if (curOffset < realEnd) {
+        setDOMCursorOffset(curOffset);
       } else {
-        const endPos = nextText.length;
-        editor.setSelectionRange(endPos, endPos);
+        setDOMCursorOffset(nextText.length);
       }
 
       triggerFastSync(true);
       updateWordCount();
-      autoGrowTextarea();
     }
 
     async function toggleAISpeech() {
@@ -1012,7 +1143,6 @@
       sessionCommittedText = '';
     }
 
-    ensureTrailingBuffer();
     applyLocalStyle();
     updateWordCount();
   </script>
