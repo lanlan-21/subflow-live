@@ -5,7 +5,8 @@
   <title>聽打工作台 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121119/diff_match_patch.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk@latest/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle.js"></script>
+  <!-- 前端輕量 QR Code 產生庫 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -17,6 +18,7 @@
       font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif;
       overflow: hidden;
     }
+    
     .toolbar {
       display: flex;
       gap: 8px;
@@ -28,6 +30,7 @@
       transition: transform 0.25s ease;
       z-index: 100;
     }
+
     #topHoverTrigger {
       display: none;
       position: fixed;
@@ -38,6 +41,7 @@
       z-index: 150;
     }
     body.toolbar-hidden #topHoverTrigger { display: block; }
+    
     body.toolbar-hidden .toolbar {
       position: fixed;
       top: 0;
@@ -47,7 +51,10 @@
       box-shadow: 0 4px 16px rgba(0,0,0,0.7);
     }
     body.toolbar-hidden .toolbar:hover,
-    body.toolbar-hidden #topHoverTrigger:hover + .toolbar { transform: translateY(0); }
+    body.toolbar-hidden #topHoverTrigger:hover + .toolbar {
+      transform: translateY(0);
+    }
+
     .control-group {
       display: flex;
       align-items: center;
@@ -55,7 +62,7 @@
       font-size: 13px;
       color: #e2e8f0;
     }
-    select, input[type="number"], input[type="text"], input[type="password"] {
+    select, input[type="number"] {
       padding: 4px 6px;
       border: 1px solid #555;
       border-radius: 4px;
@@ -76,6 +83,7 @@
       font-size: 11px;
     }
     .btn-step:hover { background: #444; }
+
     .btn {
       padding: 6px 14px;
       border: 1px solid #555;
@@ -91,9 +99,20 @@
     }
     .btn:hover { background: #3a3a3a; }
     .btn-blue { background: #2563eb; color: #fff; border: none; }
+    .btn-blue:hover { background: #1d4ed8; }
     .btn-green { background: #16a34a; color: #fff; border: none; }
+    .btn-green:hover { background: #15803d; }
+    .btn-purple { background: #7c3aed; color: #fff; border: none; }
+    .btn-purple:hover { background: #6d28d9; }
     .btn-export { background: #d97706; color: #fff; border: none; }
+    .btn-export:hover { background: #b45309; }
     .btn-dark { background: #334155; color: #fff; border: none; }
+    .btn-dark:hover { background: #475569; }
+
+    .btn-master-role {
+      font-weight: bold;
+      transition: all 0.2s;
+    }
     .btn-master-role.active {
       background: #15803d;
       color: #f0fdf4;
@@ -105,9 +124,24 @@
       color: #fde047;
       border: 1px solid #71717a;
     }
-    .btn-ai { background: #0284c7; color: #fff; border: none; }
-    .btn-ai.recording { background: #dc2626 !important; }
-    .azure-config-box {
+    .btn-master-role.inactive:hover {
+      background: #d97706;
+      color: #fff;
+    }
+
+    .btn-ai {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      transition: all 0.2s ease;
+    }
+    .btn-ai:hover { background: #0369a1; }
+    .btn-ai.recording {
+      background: #dc2626 !important;
+      box-shadow: 0 0 10px rgba(220, 38, 38, 0.6);
+    }
+
+    .mic-control-box {
       display: flex;
       align-items: center;
       gap: 6px;
@@ -115,9 +149,22 @@
       padding: 3px 8px;
       border-radius: 6px;
       border: 1px solid #444;
-      font-size: 12px;
-      color: #cbd5e1;
     }
+    .vu-meter-bar {
+      width: 50px;
+      height: 9px;
+      background: #18181b;
+      border-radius: 4px;
+      overflow: hidden;
+      border: 1px solid #52525b;
+    }
+    #vuFill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%);
+      transition: width 0.04s ease-out;
+    }
+
     .editor-wrapper {
       flex: 1;
       display: flex;
@@ -125,6 +172,7 @@
       position: relative;
       overflow: hidden;
     }
+    
     .editor-container {
       position: relative;
       flex: 1;
@@ -133,6 +181,7 @@
       overflow-y: scroll;
       overflow-x: hidden;
     }
+
     #editor {
       width: 100%;
       min-height: 100%;
@@ -143,6 +192,7 @@
       font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
       font-size: 48px;
       line-height: 1.1;
+      letter-spacing: 0px;
       color: #ffff33;
       background: transparent;
       caret-color: #ffff33;
@@ -155,6 +205,7 @@
       position: relative;
       z-index: 10;
     }
+
     #mirrorDiv {
       position: absolute;
       top: 0;
@@ -166,6 +217,7 @@
       word-break: break-all;
       text-align: justify;
     }
+
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -186,7 +238,9 @@
       border-radius: 3px;
       white-space: nowrap;
       user-select: none;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.6);
     }
+
     #aiStreamBar {
       display: none;
       padding: 8px 16px;
@@ -214,6 +268,7 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+
     #floatingActionGroup {
       display: none;
       position: absolute;
@@ -226,10 +281,12 @@
     }
     body.toolbar-hidden:not(.is-fullscreen) #floatingActionGroup { display: flex; }
     #floatingActionGroup:hover { opacity: 1; }
+
     body.is-fullscreen .toolbar,
     body.is-fullscreen .statusbar,
     body.is-fullscreen #floatingActionGroup,
     body.is-fullscreen #topHoverTrigger { display: none !important; }
+
     #exitFsBtn {
       display: none;
       position: absolute;
@@ -237,8 +294,10 @@
       right: 24px;
       z-index: 999;
       opacity: 0.25;
+      transition: opacity 0.2s;
     }
     #exitFsBtn:hover { opacity: 0.9; }
+
     .statusbar {
       padding: 6px 16px;
       background: #1e1e1e;
@@ -249,7 +308,11 @@
       justify-content: space-between;
       align-items: center;
     }
-    .status-right-box { display: flex; align-items: center; gap: 16px; }
+    .status-right-box {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
     .online-badge {
       display: inline-flex;
       align-items: center;
@@ -266,7 +329,9 @@
       border-radius: 50%;
       background: #22c55e;
       display: inline-block;
+      box-shadow: 0 0 6px #22c55e;
     }
+
     .export-dropdown { position: relative; display: inline-block; }
     .export-menu {
       display: none;
@@ -293,21 +358,78 @@
     }
     .export-menu button:hover { background-color: #2a2a2a; color: #38bdf8; }
     .show-menu { display: block; }
+
+    /* 📱 QR Code 彈窗 Modal */
+    .qr-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(5px);
+      z-index: 2000;
+      align-items: center;
+      justify-content: center;
+    }
+    .qr-modal.active { display: flex; }
+    .qr-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+      max-width: 320px;
+      width: 90%;
+      box-shadow: 0 16px 40px rgba(0,0,0,0.6);
+    }
+    .qr-card h3 {
+      color: #f8fafc;
+      font-size: 18px;
+      margin-bottom: 6px;
+    }
+    .qr-card p {
+      color: #94a3b8;
+      font-size: 13px;
+      margin-bottom: 16px;
+    }
+    #modalQrBox {
+      background: #fff;
+      padding: 12px;
+      border-radius: 12px;
+      display: inline-block;
+      margin-bottom: 16px;
+    }
+    .qr-url-text {
+      background: #0f172a;
+      border: 1px solid #334155;
+      padding: 8px 10px;
+      border-radius: 6px;
+      color: #38bdf8;
+      font-size: 12px;
+      word-break: break-all;
+      margin-bottom: 16px;
+      user-select: all;
+    }
   </style>
 </head>
 <body>
+
   <div id="topHoverTrigger"></div>
 
   <div class="toolbar" id="mainToolbar">
-    <button class="btn btn-ai" id="aiToggleBtn" onclick="toggleAzureSpeech()">🎙️ 啟動專業 AI 辨識</button>
+    <button class="btn btn-ai" id="aiToggleBtn" onclick="toggleAISpeech()">
+      🎙️ 語音辨識
+    </button>
 
-    <div class="azure-config-box">
-      <span>Key:</span>
-      <input type="password" id="azureKeyInput" placeholder="Azure Key" style="width: 90px;" onchange="saveAzureConfig()">
-      <span>Region:</span>
-      <input type="text" id="azureRegionInput" placeholder="eastasia" style="width: 75px;" onchange="saveAzureConfig()">
+    <div class="mic-control-box">
+      <div class="vu-meter-bar" title="麥克風音量">
+        <div id="vuFill"></div>
+      </div>
     </div>
 
+    <!-- 字號 -->
     <div class="control-group">
       <label for="fontSizeInput">字號：</label>
       <input type="number" id="fontSizeInput" class="size-input" value="48" min="12" max="140" step="2" onchange="applyAndSync()">
@@ -315,6 +437,7 @@
       <button class="btn-step" onclick="stepSize(-2)">A⁻</button>
     </div>
 
+    <!-- 觀看比例 -->
     <div class="control-group">
       <label for="scaleInput">比例：</label>
       <input type="number" id="scaleInput" class="size-input" value="100" min="40" max="250" step="5" onchange="applyAndSync()">%
@@ -322,6 +445,7 @@
       <button class="btn-step" onclick="stepScale(-5)">-5%</button>
     </div>
 
+    <!-- 左右邊距 -->
     <div class="control-group">
       <label for="padXInput">左右：</label>
       <input type="number" id="padXInput" class="size-input" value="8" min="0" max="200" step="2" onchange="applyAndSync()">px
@@ -329,6 +453,7 @@
       <button class="btn-step" onclick="stepPadX(-2)">-2</button>
     </div>
 
+    <!-- 上下邊距 -->
     <div class="control-group">
       <label for="padYInput">上下：</label>
       <input type="number" id="padYInput" class="size-input" value="10" min="0" max="150" step="2" onchange="applyAndSync()">px
@@ -336,11 +461,18 @@
       <button class="btn-step" onclick="stepPadY(-2)">-2</button>
     </div>
 
-    <button id="masterToggleBtn" class="btn btn-master-role active" onclick="requestMasterRole()">🔒 主投影 (鎖定中)</button>
+    <!-- 主投影按鈕 -->
+    <button id="masterToggleBtn" class="btn btn-master-role active" onclick="requestMasterRole()">
+      🔒 主投影 (鎖定中)
+    </button>
+
     <button class="btn btn-dark" onclick="toggleToolbar(false)">▲ 收起</button>
     <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
 
     <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
+      <!-- 📱 觀眾專屬 QR Code 按鈕 -->
+      <button class="btn btn-purple" onclick="openQrModal()">📱 觀眾 QR Code</button>
+
       <div class="export-dropdown">
         <button class="btn btn-export" onclick="toggleExportMenu()">📥 匯出 ▼</button>
         <div class="export-menu" id="exportMenu">
@@ -349,6 +481,7 @@
           <button onclick="exportTxt(true)">⏱️ 附時間統計 (.txt)</button>
         </div>
       </div>
+
       <button class="btn btn-blue" onclick="copyLink()">📋 複製共筆連結</button>
       <button class="btn btn-green" onclick="openAudienceView()">🖥️ 投影觀眾端</button>
     </div>
@@ -361,7 +494,7 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... 搭載 Azure 語音即時硬落袋，自由換行與修改錯字"></textarea>
+      <textarea id="editor" placeholder="在此打字... 支援 AI 連續即時吐字，隨時換行與修改錯字"></textarea>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
     </div>
@@ -371,8 +504,8 @@
 
   <div id="aiStreamBar">
     <span class="ai-indicator" id="aiIndicator"></span>
-    <span id="aiStatusTitle" style="font-weight:600; white-space: nowrap;">Azure 串流中：</span>
-    <span id="aiInterimText">請說話，字詞將即時落袋推進編輯區...</span>
+    <span id="aiStatusTitle" style="font-weight:600; white-space: nowrap;">AI 即時辨識中：</span>
+    <span id="aiInterimText">請說話，字詞將即時推進編輯區...</span>
   </div>
 
   <div class="statusbar">
@@ -383,6 +516,17 @@
         <span id="onlineCountText">連線中...</span>
       </div>
       <div id="modeHintText">身分檢查中...</div>
+    </div>
+  </div>
+
+  <!-- QR Code 彈窗 Modal -->
+  <div class="qr-modal" id="qrModal" onclick="closeQrModal(event)">
+    <div class="qr-card" onclick="event.stopPropagation()">
+      <h3>頻道 {{ room_id }} 觀眾掃描碼</h3>
+      <p>現場聽眾或外接螢幕免密碼掃碼直接看</p>
+      <div id="modalQrBox"></div>
+      <div class="qr-url-text" id="modalQrUrl"></div>
+      <button class="btn btn-blue" style="width: 100%; justify-content: center;" onclick="copyAudienceLink()">📋 複製觀眾連結</button>
     </div>
   </div>
 
@@ -402,6 +546,7 @@
     const aiStreamBar = document.getElementById('aiStreamBar');
     const aiStatusTitle = document.getElementById('aiStatusTitle');
     const aiInterimText = document.getElementById('aiInterimText');
+    const vuFill = document.getElementById('vuFill');
     const scaleInput = document.getElementById('scaleInput');
     const padXInput = document.getElementById('padXInput');
     const padYInput = document.getElementById('padYInput');
@@ -418,15 +563,8 @@
     let shadowText = "";
     const BUFFER_LINES_COUNT = 6;
 
-    const azureKeyInput = document.getElementById('azureKeyInput');
-    const azureRegionInput = document.getElementById('azureRegionInput');
-    azureKeyInput.value = localStorage.getItem('steno_azure_key') || '';
-    azureRegionInput.value = localStorage.getItem('steno_azure_region') || 'eastasia';
-
-    function saveAzureConfig() {
-      localStorage.setItem('steno_azure_key', azureKeyInput.value.trim());
-      localStorage.setItem('steno_azure_region', azureRegionInput.value.trim());
-    }
+    // 觀眾看版真實網址
+    const audienceUrl = window.location.origin + '/view/' + roomId;
 
     function ensureTrailingBuffer() {
       let val = editor.value;
@@ -738,6 +876,33 @@
       }
     });
 
+    // 📱 QR Code 視窗操作
+    let qrcodeInstance = null;
+    function openQrModal() {
+      document.getElementById('qrModal').classList.add('active');
+      document.getElementById('modalQrUrl').innerText = audienceUrl;
+      const box = document.getElementById('modalQrBox');
+      if (!qrcodeInstance) {
+        box.innerHTML = '';
+        qrcodeInstance = new QRCode(box, {
+          text: audienceUrl,
+          width: 180,
+          height: 180,
+          colorDark : "#0f172a",
+          colorLight : "#ffffff",
+          correctLevel : QRCode.CorrectLevel.M
+        });
+      }
+    }
+    function closeQrModal(e) {
+      document.getElementById('qrModal').classList.remove('active');
+    }
+    function copyAudienceLink() {
+      navigator.clipboard.writeText(audienceUrl).then(() => {
+        alert('已複製【觀眾免密碼觀看連結】！');
+      });
+    }
+
     function getFileTimestamp() {
       const now = new Date();
       return `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
@@ -769,100 +934,138 @@
     }
 
     // ==========================================
-    // 🎙️ 微軟 Azure Speech SDK：即時單向硬落袋核心
+    // 🎙️ 高靈敏免金鑰語音引擎（即時增量落袋）
     // ==========================================
-    let recognizer = null;
+    let currentRecInstance = null;
     let isAIRunning = false;
+    let audioContext = null;
+    let mediaStream = null;
+    let animFrameId = null;
+    let spawnTimer = null;
     let sessionCommittedText = '';
 
-    function toggleAzureSpeech() {
-      if (!isAIRunning) startAzureSpeech();
-      else stopAzureSpeech();
-    }
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-    function startAzureSpeech() {
-      const key = azureKeyInput.value.trim();
-      const region = azureRegionInput.value.trim();
-      if (!key || !region) {
-        alert('請先在頂部輸入 Azure Speech Key 與 Region！');
-        return;
-      }
-      if (!window.SpeechSDK) {
-        alert('Azure SDK 載入中，請稍候重試！');
-        return;
-      }
+    async function startAudioMeter() {
       try {
-        const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(key, region);
-        speechConfig.speechRecognitionLanguage = "zh-TW";
-        const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
-        recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
-        sessionCommittedText = '';
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
+        });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioContext.createMediaStreamSource(mediaStream);
+        const gainNode = audioContext.createGain();
+        gainNode.gain.value = 2.2;
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 256;
+        src.connect(gainNode);
+        gainNode.connect(analyser);
 
-        recognizer.recognizing = (s, e) => {
-          if (e.result.reason === SpeechSDK.ResultReason.RecognizingSpeech) {
-            const currentText = e.result.text;
-            if (!currentText) return;
-            if (currentText.startsWith(sessionCommittedText)) {
-              const delta = currentText.slice(sessionCommittedText.length);
-              if (delta) {
-                appendDeltaDirectly(delta);
-                sessionCommittedText = currentText;
-              }
-            } else {
-              appendDeltaDirectly(currentText);
-              sessionCommittedText = currentText;
-            }
-            aiInterimText.innerText = currentText;
-          }
-        };
-
-        recognizer.recognized = (s, e) => {
-          if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
-            sessionCommittedText = '';
-          }
-        };
-
-        recognizer.canceled = (s, e) => {
-          console.warn('Azure 錯誤:', e.errorDetails);
-          if (e.errorDetails && e.errorDetails.includes('Authentication')) {
-            alert('Azure Key 驗證失敗，請檢查輸入！');
-            stopAzureSpeech();
-          }
-        };
-
-        recognizer.sessionStopped = () => { if (isAIRunning) stopAzureSpeech(); };
-
-        recognizer.startContinuousRecognitionAsync(
-          () => {
-            isAIRunning = true;
-            aiToggleBtn.classList.add('recording');
-            aiToggleBtn.innerText = '⏹️ 停止 Azure 辨識';
-            aiStreamBar.classList.add('active');
-            aiStatusTitle.innerText = 'Azure 串流中：';
-            aiInterimText.innerText = '連線成功，字詞將即時推進...';
-          },
-          (err) => {
-            alert('啟動麥克風或連線失敗: ' + err);
-            stopAzureSpeech();
-          }
-        );
-      } catch(err) {
-        alert('初始化 Azure 失敗: ' + err);
-      }
+        const buf = new Uint8Array(analyser.frequencyBinCount);
+        function checkVolume() {
+          if (!isAIRunning) return;
+          analyser.getByteFrequencyData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) sum += buf[i];
+          let avg = sum / buf.length;
+          let p = Math.min(Math.round((avg / 110) * 100), 100);
+          vuFill.style.width = p + '%';
+          animFrameId = requestAnimationFrame(checkVolume);
+        }
+        checkVolume();
+      } catch(e) {}
     }
 
-    function stopAzureSpeech() {
-      isAIRunning = false;
-      if (recognizer) {
-        recognizer.stopContinuousRecognitionAsync(
-          () => { recognizer.close(); recognizer = null; },
-          () => { recognizer.close(); recognizer = null; }
-        );
+    function stopAudioMeter() {
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+      if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+      if (audioContext && audioContext.state !== 'closed') audioContext.close();
+      vuFill.style.width = '0%';
+    }
+
+    function spawnAndStartEngine() {
+      if (!isAIRunning) return;
+      if (!SpeechRecognition) {
+        alert('請使用 Google Chrome 或 Microsoft Edge 瀏覽器！');
+        return;
       }
-      aiToggleBtn.classList.remove('recording');
-      aiToggleBtn.innerText = '🎙️ 啟動專業 AI 辨識';
-      aiStreamBar.classList.remove('active');
-      sessionCommittedText = '';
+      if (currentRecInstance) {
+        try {
+          currentRecInstance.onend = null;
+          currentRecInstance.abort();
+        } catch(e) {}
+        currentRecInstance = null;
+      }
+
+      const rec = new SpeechRecognition();
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = 'zh-TW';
+      rec.maxAlternatives = 1;
+
+      rec.onstart = () => {
+        aiStatusTitle.innerText = 'AI 即刻出字中：';
+        aiIndicator.style.background = '#22c55e';
+        sessionCommittedText = '';
+      };
+
+      rec.onresult = (event) => {
+        let fullCurrentStream = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          fullCurrentStream += event.results[i][0].transcript;
+        }
+        fullCurrentStream = fullCurrentStream.trim();
+        if (!fullCurrentStream) return;
+
+        if (fullCurrentStream.startsWith(sessionCommittedText)) {
+          const delta = fullCurrentStream.slice(sessionCommittedText.length);
+          if (delta) {
+            appendDeltaDirectly(delta);
+            sessionCommittedText = fullCurrentStream;
+          }
+        } else {
+          let commonLen = 0;
+          while (commonLen < sessionCommittedText.length && 
+                 commonLen < fullCurrentStream.length && 
+                 sessionCommittedText[commonLen] === fullCurrentStream[commonLen]) {
+            commonLen++;
+          }
+          const delta = fullCurrentStream.slice(commonLen);
+          if (delta) {
+            appendDeltaDirectly(delta);
+            sessionCommittedText = fullCurrentStream;
+          }
+        }
+        aiInterimText.innerText = fullCurrentStream;
+        if (event.results[event.resultIndex].isFinal) sessionCommittedText = '';
+      };
+
+      rec.onerror = (event) => {
+        if (event.error === 'not-allowed') {
+          alert('麥克風存取被拒絕！');
+          stopAISpeech();
+        }
+      };
+
+      rec.onend = () => {
+        if (isAIRunning) {
+          aiIndicator.style.background = '#eab308';
+          sessionCommittedText = '';
+          clearTimeout(spawnTimer);
+          spawnTimer = setTimeout(() => {
+            if (isAIRunning) spawnAndStartEngine();
+          }, 30);
+        }
+      };
+
+      try {
+        rec.start();
+        currentRecInstance = rec;
+      } catch(err) {
+        clearTimeout(spawnTimer);
+        spawnTimer = setTimeout(() => {
+          if (isAIRunning) spawnAndStartEngine();
+        }, 60);
+      }
     }
 
     function appendDeltaDirectly(deltaText) {
@@ -886,6 +1089,37 @@
       triggerFastSync(true);
       updateWordCount();
       autoGrowTextarea();
+    }
+
+    async function toggleAISpeech() {
+      if (!isAIRunning) {
+        isAIRunning = true;
+        await startAudioMeter();
+        aiToggleBtn.classList.add('recording');
+        aiToggleBtn.innerText = '⏹️ 停止語音收音';
+        aiStreamBar.classList.add('active');
+        aiInterimText.innerText = '請說話，字詞將即刻固化入稿...';
+        spawnAndStartEngine();
+      } else {
+        stopAISpeech();
+      }
+    }
+
+    function stopAISpeech() {
+      isAIRunning = false;
+      stopAudioMeter();
+      clearTimeout(spawnTimer);
+      if (currentRecInstance) {
+        try {
+          currentRecInstance.onend = null;
+          currentRecInstance.abort();
+        } catch(e) {}
+        currentRecInstance = null;
+      }
+      aiToggleBtn.classList.remove('recording');
+      aiToggleBtn.innerText = '🎙️ 語音辨識';
+      aiStreamBar.classList.remove('active');
+      sessionCommittedText = '';
     }
 
     ensureTrailingBuffer();
