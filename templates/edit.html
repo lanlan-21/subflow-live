@@ -5,6 +5,7 @@
   <title>聽打工作台 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121119/diff_match_patch.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/microsoft-cognitiveservices-speech-sdk@latest/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -16,7 +17,6 @@
       font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif;
       overflow: hidden;
     }
-    
     .toolbar {
       display: flex;
       gap: 8px;
@@ -28,7 +28,6 @@
       transition: transform 0.25s ease;
       z-index: 100;
     }
-
     #topHoverTrigger {
       display: none;
       position: fixed;
@@ -39,7 +38,6 @@
       z-index: 150;
     }
     body.toolbar-hidden #topHoverTrigger { display: block; }
-    
     body.toolbar-hidden .toolbar {
       position: fixed;
       top: 0;
@@ -49,10 +47,7 @@
       box-shadow: 0 4px 16px rgba(0,0,0,0.7);
     }
     body.toolbar-hidden .toolbar:hover,
-    body.toolbar-hidden #topHoverTrigger:hover + .toolbar {
-      transform: translateY(0);
-    }
-
+    body.toolbar-hidden #topHoverTrigger:hover + .toolbar { transform: translateY(0); }
     .control-group {
       display: flex;
       align-items: center;
@@ -60,7 +55,7 @@
       font-size: 13px;
       color: #e2e8f0;
     }
-    select, input[type="number"], input[type="color"] {
+    select, input[type="number"], input[type="text"], input[type="password"] {
       padding: 4px 6px;
       border: 1px solid #555;
       border-radius: 4px;
@@ -81,7 +76,6 @@
       font-size: 11px;
     }
     .btn-step:hover { background: #444; }
-
     .btn {
       padding: 6px 14px;
       border: 1px solid #555;
@@ -97,18 +91,9 @@
     }
     .btn:hover { background: #3a3a3a; }
     .btn-blue { background: #2563eb; color: #fff; border: none; }
-    .btn-blue:hover { background: #1d4ed8; }
     .btn-green { background: #16a34a; color: #fff; border: none; }
-    .btn-green:hover { background: #15803d; }
     .btn-export { background: #d97706; color: #fff; border: none; }
-    .btn-export:hover { background: #b45309; }
     .btn-dark { background: #334155; color: #fff; border: none; }
-    .btn-dark:hover { background: #475569; }
-
-    .btn-master-role {
-      font-weight: bold;
-      transition: all 0.2s;
-    }
     .btn-master-role.active {
       background: #15803d;
       color: #f0fdf4;
@@ -120,24 +105,9 @@
       color: #fde047;
       border: 1px solid #71717a;
     }
-    .btn-master-role.inactive:hover {
-      background: #d97706;
-      color: #fff;
-    }
-
-    .btn-ai {
-      background: #0284c7;
-      color: #fff;
-      border: none;
-      transition: all 0.2s ease;
-    }
-    .btn-ai:hover { background: #0369a1; }
-    .btn-ai.recording {
-      background: #dc2626 !important;
-      box-shadow: 0 0 10px rgba(220, 38, 38, 0.6);
-    }
-
-    .mic-control-box {
+    .btn-ai { background: #0284c7; color: #fff; border: none; }
+    .btn-ai.recording { background: #dc2626 !important; }
+    .azure-config-box {
       display: flex;
       align-items: center;
       gap: 6px;
@@ -145,23 +115,9 @@
       padding: 3px 8px;
       border-radius: 6px;
       border: 1px solid #444;
+      font-size: 12px;
+      color: #cbd5e1;
     }
-    .vu-meter-bar {
-      width: 60px;
-      height: 9px;
-      background: #18181b;
-      border-radius: 4px;
-      overflow: hidden;
-      border: 1px solid #52525b;
-      position: relative;
-    }
-    #vuFill {
-      width: 0%;
-      height: 100%;
-      background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%);
-      transition: width 0.04s ease-out;
-    }
-
     .editor-wrapper {
       flex: 1;
       display: flex;
@@ -169,7 +125,6 @@
       position: relative;
       overflow: hidden;
     }
-    
     .editor-container {
       position: relative;
       flex: 1;
@@ -178,7 +133,6 @@
       overflow-y: scroll;
       overflow-x: hidden;
     }
-
     #editor {
       width: 100%;
       min-height: 100%;
@@ -189,7 +143,6 @@
       font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
       font-size: 48px;
       line-height: 1.1;
-      letter-spacing: 0px;
       color: #ffff33;
       background: transparent;
       caret-color: #ffff33;
@@ -202,7 +155,6 @@
       position: relative;
       z-index: 10;
     }
-
     #mirrorDiv {
       position: absolute;
       top: 0;
@@ -214,7 +166,6 @@
       word-break: break-all;
       text-align: justify;
     }
-
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -234,11 +185,8 @@
       padding: 1px 6px;
       border-radius: 3px;
       white-space: nowrap;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.6);
       user-select: none;
     }
-
     #aiStreamBar {
       display: none;
       padding: 8px 16px;
@@ -259,15 +207,13 @@
       animation: blink 1s infinite;
     }
     @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-    #aiInterimText { 
+    #aiInterimText {
       color: #ffff33;
       font-weight: 500;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      opacity: 0.85;
     }
-
     #floatingActionGroup {
       display: none;
       position: absolute;
@@ -280,12 +226,10 @@
     }
     body.toolbar-hidden:not(.is-fullscreen) #floatingActionGroup { display: flex; }
     #floatingActionGroup:hover { opacity: 1; }
-
     body.is-fullscreen .toolbar,
     body.is-fullscreen .statusbar,
     body.is-fullscreen #floatingActionGroup,
     body.is-fullscreen #topHoverTrigger { display: none !important; }
-
     #exitFsBtn {
       display: none;
       position: absolute;
@@ -293,10 +237,8 @@
       right: 24px;
       z-index: 999;
       opacity: 0.25;
-      transition: opacity 0.2s;
     }
     #exitFsBtn:hover { opacity: 0.9; }
-
     .statusbar {
       padding: 6px 16px;
       background: #1e1e1e;
@@ -307,11 +249,7 @@
       justify-content: space-between;
       align-items: center;
     }
-    .status-right-box {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
+    .status-right-box { display: flex; align-items: center; gap: 16px; }
     .online-badge {
       display: inline-flex;
       align-items: center;
@@ -328,9 +266,7 @@
       border-radius: 50%;
       background: #22c55e;
       display: inline-block;
-      box-shadow: 0 0 6px #22c55e;
     }
-
     .export-dropdown { position: relative; display: inline-block; }
     .export-menu {
       display: none;
@@ -354,34 +290,24 @@
       text-align: left;
       font-size: 14px;
       cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 6px;
     }
     .export-menu button:hover { background-color: #2a2a2a; color: #38bdf8; }
     .show-menu { display: block; }
   </style>
 </head>
 <body>
-
   <div id="topHoverTrigger"></div>
 
   <div class="toolbar" id="mainToolbar">
-    <button class="btn btn-ai" id="aiToggleBtn" onclick="toggleAISpeech()">
-      🎙️ 語音辨識
-    </button>
+    <button class="btn btn-ai" id="aiToggleBtn" onclick="toggleAzureSpeech()">🎙️ 啟動專業 AI 辨識</button>
 
-    <div class="mic-control-box">
-      <select id="audioSourceSelect" style="max-width: 110px;" onchange="onAudioSourceChange()" title="切換收音裝置">
-        <option value="">預設麥克風</option>
-      </select>
-      <div class="vu-meter-bar" title="目前音量">
-        <div id="vuFill"></div>
-      </div>
-      <span id="vuLevelText" style="font-size: 11px; color: #71717a; width: 25px;">0%</span>
+    <div class="azure-config-box">
+      <span>Key:</span>
+      <input type="password" id="azureKeyInput" placeholder="Azure Key" style="width: 90px;" onchange="saveAzureConfig()">
+      <span>Region:</span>
+      <input type="text" id="azureRegionInput" placeholder="eastasia" style="width: 75px;" onchange="saveAzureConfig()">
     </div>
 
-    <!-- 字號 -->
     <div class="control-group">
       <label for="fontSizeInput">字號：</label>
       <input type="number" id="fontSizeInput" class="size-input" value="48" min="12" max="140" step="2" onchange="applyAndSync()">
@@ -389,7 +315,6 @@
       <button class="btn-step" onclick="stepSize(-2)">A⁻</button>
     </div>
 
-    <!-- 觀看比例 -->
     <div class="control-group">
       <label for="scaleInput">比例：</label>
       <input type="number" id="scaleInput" class="size-input" value="100" min="40" max="250" step="5" onchange="applyAndSync()">%
@@ -397,7 +322,6 @@
       <button class="btn-step" onclick="stepScale(-5)">-5%</button>
     </div>
 
-    <!-- 左右邊距 -->
     <div class="control-group">
       <label for="padXInput">左右：</label>
       <input type="number" id="padXInput" class="size-input" value="8" min="0" max="200" step="2" onchange="applyAndSync()">px
@@ -405,7 +329,6 @@
       <button class="btn-step" onclick="stepPadX(-2)">-2</button>
     </div>
 
-    <!-- 上下邊距 -->
     <div class="control-group">
       <label for="padYInput">上下：</label>
       <input type="number" id="padYInput" class="size-input" value="10" min="0" max="150" step="2" onchange="applyAndSync()">px
@@ -413,11 +336,7 @@
       <button class="btn-step" onclick="stepPadY(-2)">-2</button>
     </div>
 
-    <!-- 主投影按鈕 -->
-    <button id="masterToggleBtn" class="btn btn-master-role active" onclick="requestMasterRole()">
-      🔒 主投影 (鎖定中)
-    </button>
-
+    <button id="masterToggleBtn" class="btn btn-master-role active" onclick="requestMasterRole()">🔒 主投影 (鎖定中)</button>
     <button class="btn btn-dark" onclick="toggleToolbar(false)">▲ 收起</button>
     <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
 
@@ -430,7 +349,6 @@
           <button onclick="exportTxt(true)">⏱️ 附時間統計 (.txt)</button>
         </div>
       </div>
-
       <button class="btn btn-blue" onclick="copyLink()">📋 複製共筆連結</button>
       <button class="btn btn-green" onclick="openAudienceView()">🖥️ 投影觀眾端</button>
     </div>
@@ -443,7 +361,7 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... AI 字詞即時固化入稿，支援自由換行與修改錯字"></textarea>
+      <textarea id="editor" placeholder="在此打字... 搭載 Azure 語音即時硬落袋，自由換行與修改錯字"></textarea>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
     </div>
@@ -453,8 +371,8 @@
 
   <div id="aiStreamBar">
     <span class="ai-indicator" id="aiIndicator"></span>
-    <span id="aiStatusTitle" style="font-weight:600; white-space: nowrap;">AI 即時辨識中：</span>
-    <span id="aiInterimText">請說話，字詞將即時推進編輯區...</span>
+    <span id="aiStatusTitle" style="font-weight:600; white-space: nowrap;">Azure 串流中：</span>
+    <span id="aiInterimText">請說話，字詞將即時落袋推進編輯區...</span>
   </div>
 
   <div class="statusbar">
@@ -469,12 +387,7 @@
   </div>
 
   <script>
-    const socket = io({
-      reconnection: true,
-      reconnectionAttempts: Infinity,
-      reconnectionDelay: 500
-    });
-
+    const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     const roomId = "{{ room_id }}";
     const editor = document.getElementById('editor');
     const editorContainer = document.getElementById('editorContainer');
@@ -485,16 +398,10 @@
     const modeHintText = document.getElementById('modeHintText');
     const onlineDot = document.getElementById('onlineDot');
     const onlineCountText = document.getElementById('onlineCountText');
-    
     const aiToggleBtn = document.getElementById('aiToggleBtn');
     const aiStreamBar = document.getElementById('aiStreamBar');
     const aiStatusTitle = document.getElementById('aiStatusTitle');
     const aiInterimText = document.getElementById('aiInterimText');
-    const aiIndicator = document.getElementById('aiIndicator');
-    const vuFill = document.getElementById('vuFill');
-    const vuLevelText = document.getElementById('vuLevelText');
-    const audioSourceSelect = document.getElementById('audioSourceSelect');
-    
     const scaleInput = document.getElementById('scaleInput');
     const padXInput = document.getElementById('padXInput');
     const padYInput = document.getElementById('padYInput');
@@ -507,14 +414,19 @@
     let isApplyingRemote = false;
 
     const remoteCursors = new Map();
-
     const dmp = new diff_match_patch();
-    dmp.Match_Distance = 1000;
-    dmp.Match_Threshold = 0.6;
-    dmp.Patch_DeleteThreshold = 0.6;
     let shadowText = "";
-
     const BUFFER_LINES_COUNT = 6;
+
+    const azureKeyInput = document.getElementById('azureKeyInput');
+    const azureRegionInput = document.getElementById('azureRegionInput');
+    azureKeyInput.value = localStorage.getItem('steno_azure_key') || '';
+    azureRegionInput.value = localStorage.getItem('steno_azure_region') || 'eastasia';
+
+    function saveAzureConfig() {
+      localStorage.setItem('steno_azure_key', azureKeyInput.value.trim());
+      localStorage.setItem('steno_azure_region', azureRegionInput.value.trim());
+    }
 
     function ensureTrailingBuffer() {
       let val = editor.value;
@@ -537,9 +449,7 @@
       editor.style.height = Math.max(editor.scrollHeight, editorContainer.clientHeight + 400) + 'px';
     }
 
-    socket.on('connect', () => {
-      socket.emit('join', { room: roomId, is_editor: true });
-    });
+    socket.on('connect', () => { socket.emit('join', { room: roomId, is_editor: true }); });
 
     socket.on('role_status_update', data => {
       const total = data.total_editors || 1;
@@ -548,29 +458,21 @@
 
       if (total <= 1) {
         onlineDot.style.background = '#eab308';
-        onlineDot.style.boxShadow = '0 0 6px #eab308';
         onlineCountText.innerHTML = `👤 僅您在線 (等待夥伴加入...)`;
       } else {
         onlineDot.style.background = '#22c55e';
-        onlineDot.style.boxShadow = '0 0 6px #22c55e';
         onlineCountText.innerHTML = `👥 協作在線：<strong style="color:#4ade80;">${total}</strong> 人 (您與 ${total - 1} 位夥伴)`;
       }
 
       if (amIMaster) {
         masterToggleBtn.className = "btn btn-master-role active";
-        if (total <= 1) {
-          masterToggleBtn.innerText = "🔒 主投影 (單人)";
-          modeHintText.innerText = "身分：【主投影控制台】";
-        } else {
-          masterToggleBtn.innerText = "🔒 主投影 (主控中)";
-          modeHintText.innerText = "身分：【主投影控制台】";
-        }
+        masterToggleBtn.innerText = total <= 1 ? "🔒 主投影 (單人)" : "🔒 主投影 (主控中)";
+        modeHintText.innerText = "身分：【主投影控制台】";
       } else {
         masterToggleBtn.className = "btn btn-master-role inactive";
         masterToggleBtn.innerText = "👑 點擊接管主投影";
         modeHintText.innerText = "身分：【個人檢視】自由縮放，不影響投影幕";
       }
-
       updateAllCursorTags();
     });
 
@@ -580,10 +482,7 @@
     }
 
     editor.addEventListener('compositionstart', () => { isComposing = true; });
-    editor.addEventListener('compositionupdate', () => { 
-      triggerFastSync();
-      broadcastCursorImmediately();
-    });
+    editor.addEventListener('compositionupdate', () => { triggerFastSync(); broadcastCursorImmediately(); });
     editor.addEventListener('compositionend', () => {
       isComposing = false;
       ensureTrailingBuffer();
@@ -601,13 +500,11 @@
     function triggerFastSync(immediate = false) {
       broadcastCursorImmediately();
       updateWordCount();
-
       if (immediate) {
         clearTimeout(fastSyncTimer);
         sendRealtimeSync();
         return;
       }
-
       clearTimeout(fastSyncTimer);
       fastSyncTimer = setTimeout(sendRealtimeSync, 30);
     }
@@ -618,12 +515,10 @@
       const patchText = dmp.patch_toText(patchList);
       shadowText = currentText;
 
-      const cleanForAudience = currentText.trimEnd();
-
       socket.emit('update_text', {
         room: roomId,
         text: currentText,
-        clean_text: cleanForAudience,
+        clean_text: currentText.trimEnd(),
         patch: patchText,
         font: '"DFKai-SB", "BiauKai", "標楷體", serif',
         size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
@@ -637,16 +532,12 @@
     }
 
     socket.on('sync_text', data => {
-      if (!data) return;
-      if (data.sender_sid === socket.id) return;
-
+      if (!data || data.sender_sid === socket.id) return;
       if (typeof data.text === 'string') {
         const curPos = editor.selectionStart;
         const oldText = editor.value;
-
         if (oldText !== data.text) {
           isApplyingRemote = true;
-
           let patched = false;
           if (data.patch && data.patch.trim().length > 0) {
             try {
@@ -663,11 +554,8 @@
                 if (!isComposing) editor.setSelectionRange(newPos, newPos);
                 patched = true;
               }
-            } catch(e) {
-              patched = false;
-            }
+            } catch(e) {}
           }
-
           if (!patched) {
             const diff = data.text.length - oldText.length;
             editor.value = data.text;
@@ -677,15 +565,12 @@
               editor.setSelectionRange(newPos, newPos);
             }
           }
-
           ensureTrailingBuffer();
           updateWordCount();
           redrawAllRemoteCursors();
-
           setTimeout(() => { isApplyingRemote = false; }, 10);
         }
       }
-
       if (!amIMaster && data.is_master) {
         if (data.size) document.getElementById('fontSizeInput').value = data.size;
         if (data.scale !== undefined) scaleInput.value = data.scale;
@@ -700,9 +585,7 @@
     editor.addEventListener('keydown', () => setTimeout(broadcastCursorImmediately, 0));
     editor.addEventListener('focus', broadcastCursorImmediately);
     document.addEventListener('selectionchange', () => {
-      if (document.activeElement === editor) {
-        broadcastCursorImmediately();
-      }
+      if (document.activeElement === editor) broadcastCursorImmediately();
     });
 
     let lastSentCursor = -1;
@@ -711,10 +594,7 @@
       const pos = editor.selectionStart;
       if (pos !== lastSentCursor) {
         lastSentCursor = pos;
-        socket.emit('cursor_move', {
-          room: roomId,
-          cursor_index: pos
-        });
+        socket.emit('cursor_move', { room: roomId, cursor_index: pos });
       }
     }
 
@@ -726,21 +606,17 @@
     socket.on('cursor_remove', data => {
       if (data && data.sid && remoteCursors.has(data.sid)) {
         const item = remoteCursors.get(data.sid);
-        if (item.element && item.element.parentNode) {
-          item.element.parentNode.removeChild(item.element);
-        }
+        if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
         remoteCursors.delete(data.sid);
       }
     });
 
     function updateRemoteCursor(sid, cursorIndex) {
       let item = remoteCursors.get(sid);
-
       if (!item) {
         const isTargetMaster = (sid === currentMasterSid);
         const color = isTargetMaster ? '#22c55e' : '#38bdf8';
         const label = isTargetMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
-
         const el = document.createElement('div');
         el.className = 'remote-cursor';
         el.style.backgroundColor = color;
@@ -753,13 +629,11 @@
 
         el.appendChild(tag);
         remoteCursorsContainer.appendChild(el);
-
         item = { index: cursorIndex, element: el, tagElement: tag };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
       }
-
       renderSingleRemoteCursor(sid);
     }
 
@@ -768,7 +642,6 @@
         const isTargetMaster = (sid === currentMasterSid);
         const color = isTargetMaster ? '#22c55e' : '#38bdf8';
         const label = isTargetMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
-
         item.element.style.backgroundColor = color;
         item.element.style.boxShadow = `0 0 8px ${color}`;
         item.tagElement.style.backgroundColor = color;
@@ -807,7 +680,6 @@
 
       const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
-
       el.style.left = probe.offsetLeft + 'px';
       el.style.top = probe.offsetTop + 'px';
       el.style.height = fontHeight + 'px';
@@ -816,18 +688,11 @@
     }
 
     function redrawAllRemoteCursors() {
-      for (const sid of remoteCursors.keys()) {
-        renderSingleRemoteCursor(sid);
-      }
+      for (const sid of remoteCursors.keys()) renderSingleRemoteCursor(sid);
     }
 
-    editorContainer.addEventListener('scroll', () => {
-      redrawAllRemoteCursors();
-    });
-    window.addEventListener('resize', () => {
-      autoGrowTextarea();
-      redrawAllRemoteCursors();
-    });
+    editorContainer.addEventListener('scroll', redrawAllRemoteCursors);
+    window.addEventListener('resize', () => { autoGrowTextarea(); redrawAllRemoteCursors(); });
 
     function applyLocalStyle() {
       const px = padXInput.value + 'px';
@@ -836,82 +701,40 @@
 
       editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
       editor.style.padding = `${py} ${px} 100px ${px}`;
-      
       if ('zoom' in editor.style) {
         editor.style.zoom = scaleVal;
       } else {
         editor.style.transform = `scale(${scaleVal})`;
         editor.style.width = `${100 / scaleVal}%`;
       }
-
       autoGrowTextarea();
       redrawAllRemoteCursors();
     }
 
-    function applyAndSync() {
-      applyLocalStyle();
-      triggerFastSync(true);
-    }
-
-    function stepScale(delta) {
-      scaleInput.value = Math.min(Math.max((parseInt(scaleInput.value, 10) || 100) + delta, 40), 250);
-      applyAndSync();
-    }
-
-    function stepPadX(delta) {
-      padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta);
-      applyAndSync();
-    }
-
-    function stepPadY(delta) {
-      padYInput.value = Math.max(0, (parseInt(padYInput.value, 10) || 0) + delta);
-      applyAndSync();
-    }
-
+    function applyAndSync() { applyLocalStyle(); triggerFastSync(true); }
+    function stepScale(delta) { scaleInput.value = Math.min(Math.max((parseInt(scaleInput.value, 10) || 100) + delta, 40), 250); applyAndSync(); }
+    function stepPadX(delta) { padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta); applyAndSync(); }
+    function stepPadY(delta) { padYInput.value = Math.max(0, (parseInt(padYInput.value, 10) || 0) + delta); applyAndSync(); }
     function stepSize(delta) {
       const input = document.getElementById('fontSizeInput');
       let val = (parseInt(input.value, 10) || 48) + delta;
       input.value = Math.min(Math.max(val, 12), 140);
       applyAndSync();
     }
-
-    function updateWordCount() {
-      wordCount.innerText = editor.value.replace(/\s/g, '').length;
-    }
-
-    function openAudienceView() {
-      window.open('/view/' + roomId, 'AudienceView_' + roomId, 'width=1000,height=700');
-    }
-
-    function copyLink() {
-      navigator.clipboard.writeText(window.location.href).then(() => {
-        alert('已複製【後台共筆連結】！');
-      });
-    }
-
-    function toggleToolbar(show) {
-      if (show) document.body.classList.remove('toolbar-hidden');
-      else document.body.classList.add('toolbar-hidden');
-    }
-
+    function updateWordCount() { wordCount.innerText = editor.value.replace(/\s/g, '').length; }
+    function openAudienceView() { window.open('/view/' + roomId, 'AudienceView_' + roomId, 'width=1000,height=700'); }
+    function copyLink() { navigator.clipboard.writeText(window.location.href).then(() => alert('已複製【後台共筆連結】！')); }
+    function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
     function toggleFullscreen() {
       if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
       else if (document.exitFullscreen) document.exitFullscreen();
     }
-
-    document.addEventListener('fullscreenchange', () => {
-      if (document.fullscreenElement) document.body.classList.add('is-fullscreen');
-      else document.body.classList.remove('is-fullscreen');
-    });
-
-    function toggleExportMenu() {
-      document.getElementById('exportMenu').classList.toggle('show-menu');
-    }
-
+    document.addEventListener('fullscreenchange', () => { document.body.classList.toggle('is-fullscreen', !!document.fullscreenElement); });
+    function toggleExportMenu() { document.getElementById('exportMenu').classList.toggle('show-menu'); }
     window.addEventListener('click', (e) => {
       if (!e.target.matches('.btn-export')) {
-        const menu = document.getElementById('exportMenu');
-        if (menu && menu.classList.contains('show-menu')) menu.classList.remove('show-menu');
+        const m = document.getElementById('exportMenu');
+        if (m && m.classList.contains('show-menu')) m.classList.remove('show-menu');
       }
     });
 
@@ -919,7 +742,6 @@
       const now = new Date();
       return `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
     }
-
     function downloadBlob(blob, filename) {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -929,7 +751,6 @@
       document.body.removeChild(a);
       URL.revokeObjectURL(a.href);
     }
-
     function exportTxt(withHeader = false) {
       const text = editor.value.trimEnd();
       if (!text.trim()) { alert('目前尚無內容！'); return; }
@@ -939,7 +760,6 @@
       }
       downloadBlob(new Blob(["\uFEFF" + content], { type: 'text/plain;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.txt`);
     }
-
     function exportDoc() {
       const text = editor.value.trimEnd();
       if (!text.trim()) { alert('目前尚無內容！'); return; }
@@ -948,214 +768,117 @@
       downloadBlob(new Blob(["\uFEFF" + wordHtml], { type: 'application/msword;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.doc`);
     }
 
-    // =========================================================================
-    // 🎙️ 核心重構：打字機即時單向硬出字（Incremental Append & Lock）
-    // 字詞只要辨識出來就「立刻固化落袋」，AI 絕不回頭覆寫，聽打員隨時換行修改
-    // =========================================================================
-    let currentRecInstance = null;
+    // ==========================================
+    // 🎙️ 微軟 Azure Speech SDK：即時單向硬落袋核心
+    // ==========================================
+    let recognizer = null;
     let isAIRunning = false;
-    let audioContext = null;
-    let mediaStream = null;
-    let animFrameId = null;
-    let spawnTimer = null;
-
-    // 記錄當前這輪語音已經推進編輯區的字串，只推「新增的增量字」
     let sessionCommittedText = '';
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    async function updateAudioDeviceList() {
-      try {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const inputs = devices.filter(d => d.kind === 'audioinput');
-        audioSourceSelect.innerHTML = '';
-        inputs.forEach((d, i) => {
-          const opt = document.createElement('option');
-          opt.value = d.deviceId; 
-          opt.text = d.label || `麥克風 ${i+1}`;
-          audioSourceSelect.appendChild(opt);
-        });
-      } catch(e) {}
+    function toggleAzureSpeech() {
+      if (!isAIRunning) startAzureSpeech();
+      else stopAzureSpeech();
     }
 
-    async function onAudioSourceChange() {
-      if (isAIRunning) {
-        stopAudioMeter();
-        await startAudioMeter();
-      }
-    }
-
-    async function startAudioMeter() {
-      try {
-        const devId = audioSourceSelect.value;
-        const audioConstraints = {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: true
-        };
-        if (devId) audioConstraints.deviceId = { exact: devId };
-
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
-        updateAudioDeviceList();
-        
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const src = audioContext.createMediaStreamSource(mediaStream);
-        
-        const gainNode = audioContext.createGain();
-        gainNode.gain.value = 2.4; // 高感度收音
-
-        const analyser = audioContext.createAnalyser();
-        analyser.fftSize = 256;
-        
-        src.connect(gainNode);
-        gainNode.connect(analyser);
-
-        const buf = new Uint8Array(analyser.frequencyBinCount);
-        function checkVolume() {
-          if (!isAIRunning) return;
-          analyser.getByteFrequencyData(buf);
-          let sum = 0;
-          for (let i = 0; i < buf.length; i++) sum += buf[i];
-          let avg = sum / buf.length;
-          let p = Math.min(Math.round((avg / 110) * 100), 100);
-          vuFill.style.width = p + '%';
-          vuLevelText.innerText = p > 1 ? p + '%' : '0%';
-          vuLevelText.style.color = p > 80 ? '#ef4444' : '#4ade80';
-          animFrameId = requestAnimationFrame(checkVolume);
-        }
-        checkVolume();
-        return true;
-      } catch(e) {
-        return true;
-      }
-    }
-
-    function stopAudioMeter() {
-      if (animFrameId) cancelAnimationFrame(animFrameId);
-      if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
-      if (audioContext && audioContext.state !== 'closed') audioContext.close();
-      vuFill.style.width = '0%';
-      vuLevelText.innerText = '0%';
-    }
-
-    function spawnAndStartEngine() {
-      if (!isAIRunning) return;
-      if (!SpeechRecognition) {
-        alert('您的瀏覽器不支援 Web Speech API，請使用 Chrome 或 Edge！');
+    function startAzureSpeech() {
+      const key = azureKeyInput.value.trim();
+      const region = azureRegionInput.value.trim();
+      if (!key || !region) {
+        alert('請先在頂部輸入 Azure Speech Key 與 Region！');
         return;
       }
-
-      if (currentRecInstance) {
-        try {
-          currentRecInstance.onend = null;
-          currentRecInstance.abort();
-        } catch(e) {}
-        currentRecInstance = null;
+      if (!window.SpeechSDK) {
+        alert('Azure SDK 載入中，請稍候重試！');
+        return;
       }
-
-      const rec = new SpeechRecognition();
-      rec.continuous = true;
-      rec.interimResults = true; // 開啟流式結果
-      rec.lang = 'zh-TW';
-      rec.maxAlternatives = 1;
-
-      rec.onstart = () => {
-        aiStatusTitle.innerText = 'AI 即刻出字中：';
-        aiIndicator.style.background = '#22c55e';
-        sessionCommittedText = ''; // 每一輪重置
-      };
-
-      // 🌟 核心：邊說邊出字，只要吐出新字，立刻推進編輯區成為確定文字！
-      rec.onresult = (event) => {
-        let fullCurrentStream = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          fullCurrentStream += event.results[i][0].transcript;
-        }
-
-        fullCurrentStream = fullCurrentStream.trim();
-        if (!fullCurrentStream) return;
-
-        // 計算目前辨識出的字串中，比「上次已經推進文字框」多出的部分
-        if (fullCurrentStream.startsWith(sessionCommittedText)) {
-          const delta = fullCurrentStream.slice(sessionCommittedText.length);
-          if (delta) {
-            appendDeltaDirectly(delta);
-            sessionCommittedText = fullCurrentStream;
-          }
-        } else {
-          // 若語音辨識在語意修正下微調了字句，直接把新增差異部分推入
-          let commonLen = 0;
-          while (commonLen < sessionCommittedText.length && 
-                 commonLen < fullCurrentStream.length && 
-                 sessionCommittedText[commonLen] === fullCurrentStream[commonLen]) {
-            commonLen++;
-          }
-          const delta = fullCurrentStream.slice(commonLen);
-          if (delta) {
-            appendDeltaDirectly(delta);
-            sessionCommittedText = fullCurrentStream;
-          }
-        }
-
-        aiInterimText.innerText = fullCurrentStream;
-
-        // 若整句結束標記（isFinal）
-        if (event.results[event.resultIndex].isFinal) {
-          sessionCommittedText = ''; // 歸零，準備迎接下一句
-        }
-      };
-
-      rec.onerror = (event) => {
-        if (event.error === 'not-allowed') {
-          alert('麥克風權限被拒絕！');
-          stopAISpeech();
-        }
-      };
-
-      rec.onend = () => {
-        if (isAIRunning) {
-          aiIndicator.style.background = '#eab308';
-          sessionCommittedText = '';
-          clearTimeout(spawnTimer);
-          spawnTimer = setTimeout(() => {
-            if (isAIRunning) spawnAndStartEngine();
-          }, 30);
-        }
-      };
-
       try {
-        rec.start();
-        currentRecInstance = rec;
+        const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(key, region);
+        speechConfig.speechRecognitionLanguage = "zh-TW";
+        const audioConfig = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+        recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+        sessionCommittedText = '';
+
+        recognizer.recognizing = (s, e) => {
+          if (e.result.reason === SpeechSDK.ResultReason.RecognizingSpeech) {
+            const currentText = e.result.text;
+            if (!currentText) return;
+            if (currentText.startsWith(sessionCommittedText)) {
+              const delta = currentText.slice(sessionCommittedText.length);
+              if (delta) {
+                appendDeltaDirectly(delta);
+                sessionCommittedText = currentText;
+              }
+            } else {
+              appendDeltaDirectly(currentText);
+              sessionCommittedText = currentText;
+            }
+            aiInterimText.innerText = currentText;
+          }
+        };
+
+        recognizer.recognized = (s, e) => {
+          if (e.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+            sessionCommittedText = '';
+          }
+        };
+
+        recognizer.canceled = (s, e) => {
+          console.warn('Azure 錯誤:', e.errorDetails);
+          if (e.errorDetails && e.errorDetails.includes('Authentication')) {
+            alert('Azure Key 驗證失敗，請檢查輸入！');
+            stopAzureSpeech();
+          }
+        };
+
+        recognizer.sessionStopped = () => { if (isAIRunning) stopAzureSpeech(); };
+
+        recognizer.startContinuousRecognitionAsync(
+          () => {
+            isAIRunning = true;
+            aiToggleBtn.classList.add('recording');
+            aiToggleBtn.innerText = '⏹️ 停止 Azure 辨識';
+            aiStreamBar.classList.add('active');
+            aiStatusTitle.innerText = 'Azure 串流中：';
+            aiInterimText.innerText = '連線成功，字詞將即時推進...';
+          },
+          (err) => {
+            alert('啟動麥克風或連線失敗: ' + err);
+            stopAzureSpeech();
+          }
+        );
       } catch(err) {
-        clearTimeout(spawnTimer);
-        spawnTimer = setTimeout(() => {
-          if (isAIRunning) spawnAndStartEngine();
-        }, 60);
+        alert('初始化 Azure 失敗: ' + err);
       }
     }
 
-    // 🌟 單向硬推進：字一出來就推進編輯區「固定」，你按的 Enter、改的字完全不受干擾
+    function stopAzureSpeech() {
+      isAIRunning = false;
+      if (recognizer) {
+        recognizer.stopContinuousRecognitionAsync(
+          () => { recognizer.close(); recognizer = null; },
+          () => { recognizer.close(); recognizer = null; }
+        );
+      }
+      aiToggleBtn.classList.remove('recording');
+      aiToggleBtn.innerText = '🎙️ 啟動專業 AI 辨識';
+      aiStreamBar.classList.remove('active');
+      sessionCommittedText = '';
+    }
+
     function appendDeltaDirectly(deltaText) {
       if (!deltaText) return;
-
       const userCurStart = editor.selectionStart;
       const userCurEnd = editor.selectionEnd;
-
       let val = editor.value;
       let realEnd = val.trimEnd().length;
 
-      // 拆解：既有文字 + 新出字 + 保底 6 行
       let existing = val.slice(0, realEnd);
       let nextText = existing + deltaText;
-
       editor.value = nextText + '\n'.repeat(BUFFER_LINES_COUNT);
 
-      // 如果聽打員游標停在前面（在修改、加標點、換行），游標絕對鎖定在原點，不搶奪！
       if (userCurStart < realEnd) {
         editor.setSelectionRange(userCurStart, userCurEnd);
       } else {
-        // 若聽打員本來就在文末，游標平滑順移到最新字後方
         const endPos = nextText.length;
         editor.setSelectionRange(endPos, endPos);
       }
@@ -1165,49 +888,8 @@
       autoGrowTextarea();
     }
 
-    async function toggleAISpeech() {
-      const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-      if (!isSecure) {
-        alert('【安全性提醒】Web Speech API 只能在 HTTPS 或 localhost/127.0.0.1 運行！');
-      }
-
-      if (!isAIRunning) {
-        isAIRunning = true;
-        await startAudioMeter();
-
-        aiToggleBtn.classList.add('recording');
-        aiToggleBtn.innerText = '⏹️ 停止語音收音';
-        aiStreamBar.classList.add('active');
-        aiInterimText.innerText = '請說話，字詞即刻固化入稿...';
-
-        spawnAndStartEngine();
-      } else {
-        stopAISpeech();
-      }
-    }
-
-    function stopAISpeech() {
-      isAIRunning = false;
-      stopAudioMeter();
-      clearTimeout(spawnTimer);
-
-      if (currentRecInstance) {
-        try {
-          currentRecInstance.onend = null;
-          currentRecInstance.abort();
-        } catch(e) {}
-        currentRecInstance = null;
-      }
-
-      aiToggleBtn.classList.remove('recording');
-      aiToggleBtn.innerText = '🎙️ 語音辨識';
-      aiStreamBar.classList.remove('active');
-      sessionCommittedText = '';
-    }
-
-    navigator.mediaDevices.enumerateDevices().then(updateAudioDeviceList).catch(()=>{});
     ensureTrailingBuffer();
-    applyLocalStyle(); 
+    applyLocalStyle();
     updateWordCount();
   </script>
 </body>
