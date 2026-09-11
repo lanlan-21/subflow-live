@@ -5,7 +5,6 @@
   <title>聽打工作台 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121119/diff_match_patch.js"></script>
-  <!-- 前端輕量 QR Code 產生庫 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; }
@@ -218,6 +217,7 @@
       text-align: justify;
     }
 
+    /* 🌟 拔除所有 transition 動畫，避免任何位移抖動 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -225,7 +225,7 @@
       z-index: 50;
       display: none;
       transform-origin: top left;
-      transition: top 0.04s linear, left 0.04s linear;
+      transition: none !important;
     }
     .remote-cursor-tag {
       position: absolute;
@@ -239,6 +239,7 @@
       white-space: nowrap;
       user-select: none;
       box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+      transition: none !important;
     }
 
     #aiStreamBar {
@@ -294,7 +295,6 @@
       right: 24px;
       z-index: 999;
       opacity: 0.25;
-      transition: opacity 0.2s;
     }
     #exitFsBtn:hover { opacity: 0.9; }
 
@@ -359,7 +359,6 @@
     .export-menu button:hover { background-color: #2a2a2a; color: #38bdf8; }
     .show-menu { display: block; }
 
-    /* 📱 QR Code 彈窗 Modal */
     .qr-modal {
       display: none;
       position: fixed;
@@ -470,7 +469,6 @@
     <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
 
     <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
-      <!-- 📱 觀眾專屬 QR Code 按鈕 -->
       <button class="btn btn-purple" onclick="openQrModal()">📱 觀眾 QR Code</button>
 
       <div class="export-dropdown">
@@ -494,7 +492,7 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... 支援 AI 連續即時吐字，隨時換行與修改錯字"></textarea>
+      <textarea id="editor" placeholder="在此打字... 支援雙人無震顫穩定同步"></textarea>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
     </div>
@@ -563,7 +561,6 @@
     let shadowText = "";
     const BUFFER_LINES_COUNT = 6;
 
-    // 觀眾看版真實網址
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
     function ensureTrailingBuffer() {
@@ -582,9 +579,12 @@
       autoGrowTextarea();
     }
 
+    // 🌟 修復核心 1：拔除重排重設，只有在高度真正不夠時才單向擴展，徹底消除頁面震動
     function autoGrowTextarea() {
-      editor.style.height = 'auto';
-      editor.style.height = Math.max(editor.scrollHeight, editorContainer.clientHeight + 400) + 'px';
+      const minHeight = editorContainer.clientHeight + 400;
+      if (editor.scrollHeight > editor.clientHeight || editor.clientHeight < minHeight) {
+        editor.style.height = Math.max(editor.scrollHeight, minHeight) + 'px';
+      }
     }
 
     socket.on('connect', () => { socket.emit('join', { room: roomId, is_editor: true }); });
@@ -787,6 +787,7 @@
       });
     }
 
+    // 🌟 修復核心 2：直接瞬間就位（Zero-latency direct snap），完全沒有補間動畫
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || !editor.value) return;
@@ -876,7 +877,6 @@
       }
     });
 
-    // 📱 QR Code 視窗操作
     let qrcodeInstance = null;
     function openQrModal() {
       document.getElementById('qrModal').classList.add('active');
@@ -933,9 +933,6 @@
       downloadBlob(new Blob(["\uFEFF" + wordHtml], { type: 'application/msword;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.doc`);
     }
 
-    // ==========================================
-    // 🎙️ 高靈敏免金鑰語音引擎（即時增量落袋）
-    // ==========================================
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
