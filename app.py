@@ -20,7 +20,7 @@ room_editors = {}   # room_id -> set of editor sids
 
 @app.before_request
 def require_login():
-    # 1. 靜態資源與登入頁全面放行
+    # 1. 靜態資源、登入頁放行
     if request.endpoint in ['login', 'static']:
         return None
     
@@ -30,9 +30,9 @@ def require_login():
     
     # 3. 控制台與首頁驗證攔截
     if not session.get('authenticated'):
-        # 排除 login 本身，只記錄使用者真實想造訪的頁面
-        if request.endpoint != 'login':
-            session['next_url'] = request.url
+        # 排除 login 本身，只在合法路由下記錄目標頁面
+        if request.endpoint and request.endpoint != 'login':
+            session['next_url'] = request.path
         return redirect(url_for('login'))
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -42,11 +42,12 @@ def login():
         user_input_pass = request.form.get('password', '')
         if user_input_pass == SITE_PASSWORD:
             session['authenticated'] = True
-            # 安全取得目標頁面，若沒有或目標是 login 就直接導回首頁，徹底解決轉跳迴圈
-            next_page = session.pop('next_url', None)
-            if not next_page or '/login' in next_page:
-                next_page = url_for('index')
-            return redirect(next_page)
+            
+            # 安全取得目標頁面，若不存在或有異常，一律直接回首頁
+            target_path = session.pop('next_url', None)
+            if not target_path or target_path == '/login':
+                return redirect('/')
+            return redirect(target_path)
         else:
             error = "密碼錯誤，請重新輸入！"
     return render_template('login.html', error=error)
@@ -67,6 +68,11 @@ def view_room(room_id):
 def new_room():
     unique_id = str(uuid.uuid4())[:8]
     return redirect(f'/edit/{unique_id}')
+
+# 🌟 404 防呆：萬一網址打錯或迷路，自動平滑回首頁，不報錯
+@app.errorhandler(404)
+def page_not_found(e):
+    return redirect('/')
 
 @socketio.on('join')
 def on_join(data):
