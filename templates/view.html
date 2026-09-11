@@ -198,7 +198,7 @@
     socket.on('connect', () => { netDot.style.background = '#22c55e'; });
     socket.on('disconnect', () => { netDot.style.background = '#ef4444'; });
 
-    // 初次載入
+    // 初次進來立即從伺服器拉取最新完整文稿
     socket.on('init_document', data => {
       if (!data) return;
       box.innerText = (data.text || '').trimEnd();
@@ -206,14 +206,23 @@
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
     });
 
-    // 即時更新
-    socket.on('doc_updated', data => {
+    // 接收即時文字同步
+    socket.on('sync_text', data => {
       if (!data) return;
-      if (typeof data.text === 'string') {
-        box.innerText = data.text.trimEnd();
+      const displayText = data.clean_text !== undefined ? data.clean_text : data.text;
+      if (typeof displayText === 'string') {
+        box.innerText = displayText;
         window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
       }
-      if (data.settings) updateStyle(data.settings);
+      box.style.fontFamily = '"DFKai-SB", "BiauKai", "標楷體", "TW-Kai", serif';
+      if (data.size) box.style.fontSize = data.size + 'px';
+      if (data.pad_x !== undefined && data.pad_y !== undefined) {
+        box.style.padding = `${data.pad_y}px ${data.pad_x}px 70px ${data.pad_x}px`;
+      }
+      if (data.scale !== undefined) {
+        masterBaseScale = data.scale;
+        applyCombinedScale();
+      }
     });
 
     function updateStyle(s) {
