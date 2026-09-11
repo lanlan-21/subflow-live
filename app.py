@@ -20,7 +20,7 @@ room_editors = {}   # room_id -> set of editor sids
 
 @app.before_request
 def require_login():
-    # 1. 靜態資源與登入頁放行
+    # 1. 靜態資源與登入頁全面放行
     if request.endpoint in ['login', 'static']:
         return None
     
@@ -30,7 +30,9 @@ def require_login():
     
     # 3. 控制台與首頁驗證攔截
     if not session.get('authenticated'):
-        session['next_url'] = request.url
+        # 排除 login 本身，只記錄使用者真實想造訪的頁面
+        if request.endpoint != 'login':
+            session['next_url'] = request.url
         return redirect(url_for('login'))
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -40,7 +42,10 @@ def login():
         user_input_pass = request.form.get('password', '')
         if user_input_pass == SITE_PASSWORD:
             session['authenticated'] = True
-            next_page = session.pop('next_url', url_for('index'))
+            # 安全取得目標頁面，若沒有或目標是 login 就直接導回首頁，徹底解決轉跳迴圈
+            next_page = session.pop('next_url', None)
+            if not next_page or '/login' in next_page:
+                next_page = url_for('index')
             return redirect(next_page)
         else:
             error = "密碼錯誤，請重新輸入！"
