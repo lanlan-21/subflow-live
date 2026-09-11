@@ -501,7 +501,6 @@
   <div class="statusbar">
     <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
     <div class="status-right-box">
-      <!-- 觀眾在線即時統計徽章 -->
       <div class="viewer-badge">
         <span>📺 觀眾在線：</span><strong id="viewerCountText" style="color: #93c5fd;">0</strong><span> 人</span>
       </div>
@@ -557,6 +556,14 @@
     const BUFFER_LINES_COUNT = 6;
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
+    // 🌟 離開頁面防誤關彈窗（編輯區有文字時，重整、按叉叉或離開頁面會跳出確認）
+    window.addEventListener('beforeunload', (e) => {
+      if (editor.value.trim().length > 0) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+
     function ensureTrailingBuffer() {
       let val = editor.value;
       let count = 0;
@@ -606,9 +613,7 @@
       const totalEditors = data.total_editors || 1;
       const totalViewers = data.total_viewers || 0;
       
-      // 更新觀眾統計數值
       viewerCountText.innerText = totalViewers;
-
       currentMasterSid = data.master_sid;
       amIMaster = (currentMasterSid === socket.id);
 
@@ -970,7 +975,7 @@
       downloadBlob(new Blob(["\uFEFF" + wordHtml], { type: 'application/msword;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.doc`);
     }
 
-    // AI 語音引擎
+    // AI 語音收音引擎
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
