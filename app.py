@@ -1,34 +1,35 @@
+import os
+import uuid
 from flask import Flask, render_template, request, redirect, session, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
-import uuid
 
 app = Flask(__name__)
-app.secret_key = "steno_private_secret_key_2026"
+app.secret_key = os.environ.get("SECRET_KEY", "steno_private_secret_key_2026")
 
-# 🌟 設定後台管理密碼（可自由修改）
-SITE_PASSWORD = "8888"
+# 專屬管理密碼（支援由 Render 環境變數注入，預設 8888）
+SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "8888")
 
-# 關閉持久化儲存，確保「關閉瀏覽器即登出」
+# 關閉持久化 Session：瀏覽器關閉即需重新驗證
 app.config['SESSION_PERMANENT'] = False
 
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# 記憶體狀態追蹤
 room_masters = {}   # room_id -> master_sid
 room_editors = {}   # room_id -> set of editor sids
 
 @app.before_request
 def require_login():
-    # 1. 允許登入頁面與靜態檔案
+    # 1. 靜態資源與登入頁放行
     if request.endpoint in ['login', 'static']:
         return None
     
-    # 2. 🌟 觀眾區全面免密碼：網址開頭為 /view/ 者直接放行
+    # 2. 觀眾投影看版全面免密碼放行
     if request.path.startswith('/view/'):
         return None
     
-    # 3. 首頁、/edit/ 工作台等管理頁面需驗證密碼
+    # 3. 控制台與首頁驗證攔截
     if not session.get('authenticated'):
-        # 記錄使用者原本想去的網址，登入後自動轉跳回來
         session['next_url'] = request.url
         return redirect(url_for('login'))
 
@@ -39,7 +40,6 @@ def login():
         user_input_pass = request.form.get('password', '')
         if user_input_pass == SITE_PASSWORD:
             session['authenticated'] = True
-            # 登入成功後，轉跳回原本想開啟的頁面或首頁
             next_page = session.pop('next_url', url_for('index'))
             return redirect(next_page)
         else:
@@ -131,4 +131,5 @@ def broadcast_role_status(room):
     }, to=room)
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=10000, debug=True)
+    port = int(os.environ.get('PORT', 10000))
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
