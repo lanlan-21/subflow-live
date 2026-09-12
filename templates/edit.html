@@ -554,7 +554,7 @@
   <script>
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     const roomId = "{{ room_id }}";
-    const editor = document.getElementById('editor');
+    let editor = document.getElementById('editor');
     const editorContainer = document.getElementById('editorContainer');
     const mirrorDiv = document.getElementById('mirrorDiv');
     const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
@@ -595,45 +595,47 @@
           e.preventDefault();
           e.returnValue = msg;
         }
-        
-        // 🌟 關鍵修正：若使用者在彈窗出現後點選「取消」留下來，定時觸發重新喚醒 IME 輸入法引擎
-        scheduleImeRecovery();
-
+        // 使用者點選取消留在頁面時，啟動深度重構救援
+        scheduleImeDeepRebuild();
         return msg;
       }
     }
     window.onbeforeunload = handleBeforeUnload;
     window.addEventListener('beforeunload', handleBeforeUnload);
 
-    // 🌟 2. IME 輸入法解凍救援機制（Re-bind IME Context）
-    function forceRecoverIME() {
-      if (!editor) return;
+    // 🌟 2. 深度重建 DOM 節點以徹底復活 Windows IME（微軟注音）
+    function rebuildEditorNode() {
+      if (!editor || !editor.parentNode) return;
       const curStart = editor.selectionStart;
       const curEnd = editor.selectionEnd;
+      const textVal = editor.value;
 
-      // 透過微秒級失焦 -> 重新聚焦，強迫 Windows IME 重新掛載到 DOM
-      editor.blur();
-      requestAnimationFrame(() => {
-        editor.focus();
-        editor.setSelectionRange(curStart, curEnd);
-      });
+      // 複製現有輸入框的所有樣式與屬性
+      const newEditor = editor.cloneNode(false);
+      newEditor.value = textVal;
+
+      // 替換舊節點（強迫 Windows 作業系統註冊全新的 TSF 輸入法 Context）
+      editor.parentNode.replaceChild(newEditor, editor);
+      editor = newEditor;
+
+      // 重新綁定所有事件監聽
+      bindEditorEvents();
+
+      // 還原游標與焦點
+      applyLocalStyle();
+      editor.focus();
+      editor.setSelectionRange(curStart, curEnd);
+      updateEndLinePosition();
     }
 
-    function scheduleImeRecovery() {
-      // 彈窗關閉後分別在 100ms、300ms、600ms 執行階梯式復原，確保注音輸入法徹底被喚醒
-      setTimeout(forceRecoverIME, 100);
-      setTimeout(forceRecoverIME, 300);
-      setTimeout(forceRecoverIME, 600);
+    function scheduleImeDeepRebuild() {
+      setTimeout(rebuildEditorNode, 150);
+      setTimeout(rebuildEditorNode, 400);
     }
 
-    // 視窗重新獲取焦點時自動解鎖 IME
     window.addEventListener('focus', () => {
-      forceRecoverIME();
-    });
-
-    // 點擊編輯區時若 IME 失效，亦可一秒喚醒
-    editor.addEventListener('focus', () => {
-      // 確保內部綁定正常
+      // 點回視窗時若有必要亦可執行平順焦點保全
+      if (editor) editor.focus();
     });
 
     function ensureTrailingBuffer() {
@@ -661,7 +663,7 @@
     }
 
     function updateEndLinePosition() {
-      if (!editor.value) return;
+      if (!editor || !editor.value) return;
       const cs = window.getComputedStyle(editor);
 
       mirrorDiv.style.fontFamily = cs.fontFamily;
@@ -746,19 +748,29 @@
       socket.emit('claim_master', { room: roomId });
     }
 
-    editor.addEventListener('compositionstart', () => { isComposing = true; });
-    editor.addEventListener('compositionend', () => {
-      isComposing = false;
-      ensureTrailingBuffer();
-      triggerFastSync(true);
-    });
-
-    editor.addEventListener('input', () => {
-      if (!isApplyingRemote) {
+    function bindEditorEvents() {
+      editor.addEventListener('compositionstart', () => { isComposing = true; });
+      editor.addEventListener('compositionend', () => {
+        isComposing = false;
         ensureTrailingBuffer();
-        triggerFastSync();
-      }
-    });
+        triggerFastSync(true);
+      });
+
+      editor.addEventListener('input', () => {
+        if (!isApplyingRemote) {
+          ensureTrailingBuffer();
+          triggerFastSync();
+        }
+      });
+
+      editor.addEventListener('click', broadcastCursorOnly);
+      editor.addEventListener('keyup', (e) => {
+        if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)) {
+          broadcastCursorOnly();
+        }
+      });
+    }
+    bindEditorEvents();
 
     function triggerFastSync(immediate = false) {
       updateWordCount();
@@ -848,13 +860,6 @@
       }
     });
 
-    editor.addEventListener('click', broadcastCursorOnly);
-    editor.addEventListener('keyup', (e) => {
-      if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)) {
-        broadcastCursorOnly();
-      }
-    });
-
     let lastSentCursor = -1;
     function broadcastCursorOnly() {
       if (isApplyingRemote || isComposing) return;
@@ -918,7 +923,7 @@
 
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
-      if (!item || !editor.value) return;
+      if (!item || !editor || !editor.value) return;
 
       const el = item.element;
       const targetIndex = Math.min(Math.max(item.index, 0), editor.value.length);
@@ -995,6 +1000,7 @@
     });
 
     function applyLocalStyle() {
+      if (!editor) return;
       const px = padXInput.value + 'px';
       const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
@@ -1022,7 +1028,7 @@
       input.value = Math.min(Math.max(val, 12), 140);
       applyAndSync();
     }
-    function updateWordCount() { wordCount.innerText = editor.value.replace(/\s/g, '').length; }
+    function updateWordCount() { if (editor) wordCount.innerText = editor.value.replace(/\s/g, '').length; }
     function openAudienceView() { window.open('/view/' + roomId, 'AudienceView_' + roomId, 'width=1000,height=700'); }
     function copyLink() { navigator.clipboard.writeText(window.location.href).then(() => alert('已複製【後台共筆連結】！')); }
     function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
