@@ -10,9 +10,10 @@ app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 記憶體資料庫
+# 記憶體資料庫結構增加 version 定序
 # rooms[room_id] = {
 #     "text": "",
+#     "version": 0,
 #     "settings": {"size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
 #     "master_sid": None,
 #     "editors": set(),
@@ -20,20 +21,18 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 # }
 rooms = {}
 
-# 存放各房間的自動銷毀計時器：cleanup_timers[room_id] = Timer 物件
 cleanup_timers = {}
-CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘 = 1800 秒
+CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘
 
 
 def schedule_room_cleanup(room_id):
-    """當房間全員離線時，啟動 30 分鐘倒數清空計時器"""
     cancel_room_cleanup(room_id)
 
     def cleanup_job():
         if room_id in rooms:
             total_connected = len(rooms[room_id].get("editors", set())) + len(rooms[room_id].get("viewers", set()))
             if total_connected == 0:
-                print(f"[自動清理] 房間 {room_id} 已全員離線閒置 30 分鐘，執行記憶體清空銷毀。")
+                print(f"[自動清理] 房間 {room_id} 閒置達 30 分鐘，清空記憶體。")
                 rooms.pop(room_id, None)
         cleanup_timers.pop(room_id, None)
 
@@ -41,15 +40,12 @@ def schedule_room_cleanup(room_id):
     timer.daemon = True
     cleanup_timers[room_id] = timer
     timer.start()
-    print(f"[倒數啟動] 房間 {room_id} 全員離線，若 30 分鐘內無人返回將自動銷毀釋放記憶體。")
 
 
 def cancel_room_cleanup(room_id):
-    """若有夥伴或觀眾重新進房，立即終止並取消銷毀計時器"""
     timer = cleanup_timers.pop(room_id, None)
     if timer:
         timer.cancel()
-        print(f"[倒數取消] 房間 {room_id} 檢測到人員重新加入，取消自動銷毀。")
 
 
 @app.route('/')
@@ -73,7 +69,6 @@ def new_room():
     return redirect(url_for('edit', room_id=random_str))
 
 
-# SocketIO 協作事件監聽
 @socketio.on('join')
 def handle_join(data):
     room_id = data.get('room')
@@ -83,12 +78,12 @@ def handle_join(data):
     if not room_id:
         return
 
-    # 若該房間原本處於離線銷毀倒數中，立刻解除倒數
     cancel_room_cleanup(room_id)
 
     if room_id not in rooms:
         rooms[room_id] = {
             "text": "",
+            "version": 0,
             "settings": {"size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
             "master_sid": None,
             "editors": set(),
@@ -104,9 +99,9 @@ def handle_join(data):
     else:
         rooms[room_id]["viewers"].add(sid)
 
-    # 發送當前文件狀態與設定給新進人員
     emit('init_document', {
         "text": rooms[room_id]["text"],
+        "version": rooms[room_id]["version"],
         "settings": rooms[room_id]["settings"]
     }, to=sid)
 
@@ -121,9 +116,12 @@ def handle_sync_text(data):
     if not room_id or room_id not in rooms:
         return
 
-    # 收到任何打字操作時確認取消清理倒數
     cancel_room_cleanup(room_id)
 
+    # 伺服器原子遞增版本號
+    rooms[room_id]["version"] += 1
+    server_version = rooms[room_id]["version"]
+    
     new_text = data.get('text', '')
     rooms[room_id]["text"] = new_text
 
@@ -134,9 +132,11 @@ def handle_sync_text(data):
         rooms[room_id]["settings"]["pad_x"] = data.get('pad_x', 8)
         rooms[room_id]["settings"]["pad_y"] = data.get('pad_y', 10)
 
+    data['version'] = server_version
     data['sender_sid'] = sid
     data['is_master'] = is_master
 
+    # 廣播給同房間其他人
     emit('sync_text', data, to=room_id, include_self=False)
 
 
@@ -181,7 +181,6 @@ def handle_disconnect():
         if modified:
             broadcast_roles_status(room_id)
             total_active = len(rdata["editors"]) + len(rdata["viewers"])
-            # 房間完全沒有人連線時，正式啟動 30 分鐘自動抹除倒數
             if total_active == 0:
                 schedule_room_cleanup(room_id)
 
@@ -199,5 +198,4 @@ def broadcast_roles_status(room_id):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    # 加上 allow_unsafe_werkzeug=True 以放行 Render 雲端環境啟動
     socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
