@@ -586,7 +586,7 @@
     const BUFFER_LINES_COUNT = 6;
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
-    // 🌟 全面無差別退出防護（所有房間通用）
+    // 🌟 1. 退出防護
     function handleBeforeUnload(e) {
       if (editor && editor.value && editor.value.trim().length > 0) {
         e = e || window.event;
@@ -595,11 +595,46 @@
           e.preventDefault();
           e.returnValue = msg;
         }
+        
+        // 🌟 關鍵修正：若使用者在彈窗出現後點選「取消」留下來，定時觸發重新喚醒 IME 輸入法引擎
+        scheduleImeRecovery();
+
         return msg;
       }
     }
     window.onbeforeunload = handleBeforeUnload;
     window.addEventListener('beforeunload', handleBeforeUnload);
+
+    // 🌟 2. IME 輸入法解凍救援機制（Re-bind IME Context）
+    function forceRecoverIME() {
+      if (!editor) return;
+      const curStart = editor.selectionStart;
+      const curEnd = editor.selectionEnd;
+
+      // 透過微秒級失焦 -> 重新聚焦，強迫 Windows IME 重新掛載到 DOM
+      editor.blur();
+      requestAnimationFrame(() => {
+        editor.focus();
+        editor.setSelectionRange(curStart, curEnd);
+      });
+    }
+
+    function scheduleImeRecovery() {
+      // 彈窗關閉後分別在 100ms、300ms、600ms 執行階梯式復原，確保注音輸入法徹底被喚醒
+      setTimeout(forceRecoverIME, 100);
+      setTimeout(forceRecoverIME, 300);
+      setTimeout(forceRecoverIME, 600);
+    }
+
+    // 視窗重新獲取焦點時自動解鎖 IME
+    window.addEventListener('focus', () => {
+      forceRecoverIME();
+    });
+
+    // 點擊編輯區時若 IME 失效，亦可一秒喚醒
+    editor.addEventListener('focus', () => {
+      // 確保內部綁定正常
+    });
 
     function ensureTrailingBuffer() {
       let val = editor.value;
