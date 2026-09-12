@@ -10,7 +10,7 @@ app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 記憶體資料庫結構增加 version 定序
+# 記憶體資料結構
 # rooms[room_id] = {
 #     "text": "",
 #     "version": 0,
@@ -22,7 +22,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 rooms = {}
 
 cleanup_timers = {}
-CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘
+CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘全員離線自動銷毀
 
 
 def schedule_room_cleanup(room_id):
@@ -118,10 +118,7 @@ def handle_sync_text(data):
 
     cancel_room_cleanup(room_id)
 
-    # 伺服器原子遞增版本號
     rooms[room_id]["version"] += 1
-    server_version = rooms[room_id]["version"]
-    
     new_text = data.get('text', '')
     rooms[room_id]["text"] = new_text
 
@@ -132,11 +129,10 @@ def handle_sync_text(data):
         rooms[room_id]["settings"]["pad_x"] = data.get('pad_x', 8)
         rooms[room_id]["settings"]["pad_y"] = data.get('pad_y', 10)
 
-    data['version'] = server_version
+    data['version'] = rooms[room_id]["version"]
     data['sender_sid'] = sid
     data['is_master'] = is_master
 
-    # 廣播給同房間其他人
     emit('sync_text', data, to=room_id, include_self=False)
 
 
@@ -154,9 +150,11 @@ def handle_cursor_move(data):
     room_id = data.get('room')
     sid = request.sid
     if room_id in rooms:
+        # 🌟 確保轉發正在輸入的字詞給搭檔
         emit('cursor_update', {
             'sid': sid,
-            'cursor_index': data.get('cursor_index', 0)
+            'cursor_index': data.get('cursor_index', 0),
+            'typing_text': data.get('typing_text', '')
         }, to=room_id, include_self=False)
 
 
