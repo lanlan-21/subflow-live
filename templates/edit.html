@@ -518,7 +518,6 @@
     <button class="btn btn-dark" onclick="toggleToolbar(false)">▲ 收起</button>
     <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
 
-    <!-- 🌟 一鍵清空畫布（帶雙重防呆警告） -->
     <button class="btn btn-danger" onclick="confirmClearCanvas()">
       🗑️ 清空畫布
     </button>
@@ -626,7 +625,52 @@
     const BUFFER_LINES_COUNT = 6;
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
-    // 🌟 一鍵清空畫布與檔案刪除警告防呆
+    // 🌟 本地飛行記錄黑盒子（LocalStorage 快照鍵名）
+    const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
+    let localSaveDebounce = null;
+
+    function saveToLocalBlackbox() {
+      clearTimeout(localSaveDebounce);
+      localSaveDebounce = setTimeout(() => {
+        try {
+          const raw = editor.value.trimEnd();
+          if (raw.trim().length > 0) {
+            localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify({
+              text: raw,
+              time: Date.now()
+            }));
+          }
+        } catch(e) {}
+      }, 500);
+    }
+
+    function checkLocalBlackboxRestore(serverText) {
+      try {
+        const savedRaw = localStorage.getItem(LOCAL_BACKUP_KEY);
+        if (!savedRaw) return;
+        const savedData = JSON.parse(savedRaw);
+        if (!savedData || !savedData.text) return;
+
+        const serverLen = (serverText || "").trim().length;
+        const localLen = savedData.text.trim().length;
+
+        // 當伺服器內容明顯比本地暫存少，且本地有實質文字時詢問還原
+        if (localLen > 5 && serverLen === 0) {
+          const formattedTime = new Date(savedData.time).toLocaleTimeString('zh-TW');
+          const restoreConfirm = confirm(`💡【災難還原提醒】\n\n檢測到您本機留有剛才未匯出的打字記錄：\n- 儲存時間：約 ${formattedTime}\n- 內容長度：${localLen} 字\n\n請問是否一鍵還原到畫布並同步？\n【確定】：立刻還原\n【取消】：捨棄舊記錄使用新畫布`);
+          
+          if (restoreConfirm) {
+            editor.value = savedData.text + '\n'.repeat(BUFFER_LINES_COUNT);
+            editor.setSelectionRange(savedData.text.length, savedData.text.length);
+            triggerFastSync(true);
+            updateWordCount();
+            autoGrowTextarea();
+            updateEndLinePosition();
+          }
+        }
+      } catch(e) {}
+    }
+
     function confirmClearCanvas() {
       const currentLength = editor.value.trim().length;
       if (currentLength === 0) {
@@ -637,12 +681,11 @@
       const warningMsg = `⚠️【嚴重警告：即將清空畫布】\n\n目前共有 ${currentLength} 個字。\n此操作將會清空整份逐字稿，且同步清除大螢幕與協作夥伴的畫面！\n\n請確認您是否已經「匯出下載」備份？\n確定要永久清空請按【確定】，取消請按【取消】。`;
       
       if (confirm(warningMsg)) {
-        // 清空文字並重設緩衝區
         editor.value = '\n'.repeat(BUFFER_LINES_COUNT);
         editor.setSelectionRange(0, 0);
         shadowText = "";
+        try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {}
         
-        // 立即觸發全場同步
         triggerFastSync(true);
         updateWordCount();
         autoGrowTextarea();
@@ -770,6 +813,9 @@
         applyLocalStyle();
       }
       isApplyingRemote = false;
+
+      // 檢查本機是否有快照可供還原
+      checkLocalBlackboxRestore(data.text);
     });
 
     socket.on('role_status_update', data => {
@@ -811,12 +857,14 @@
         isComposing = false;
         ensureTrailingBuffer();
         triggerFastSync(true);
+        saveToLocalBlackbox();
       });
 
       editor.addEventListener('input', () => {
         if (!isApplyingRemote) {
           ensureTrailingBuffer();
           triggerFastSync();
+          saveToLocalBlackbox();
         }
       });
 
@@ -899,6 +947,7 @@
           ensureTrailingBuffer();
           updateWordCount();
           updateEndLinePosition();
+          saveToLocalBlackbox();
           
           if (data.cursor_index !== undefined) {
             updateRemoteCursor(data.sender_sid, data.cursor_index);
@@ -1306,6 +1355,7 @@
       updateWordCount();
       updateEndLinePosition();
       autoGrowTextarea();
+      saveToLocalBlackbox();
     }
 
     async function toggleAISpeech() {
