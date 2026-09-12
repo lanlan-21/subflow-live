@@ -205,7 +205,6 @@
       z-index: 10;
     }
 
-    /* 🌟 動態跟隨在最後一行的實體 END 標記線 */
     #endLineMarker {
       position: absolute;
       left: 8px;
@@ -514,7 +513,6 @@
 
     <div class="editor-container" id="editorContainer">
       <textarea id="editor" placeholder="在此打字... 支援雙人穩定差量同步"></textarea>
-      <!-- 🌟 跟隨輸入框最後一行的動態標記線 -->
       <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
@@ -588,12 +586,20 @@
     const BUFFER_LINES_COUNT = 6;
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
-    window.addEventListener('beforeunload', (e) => {
-      if (editor.value.trim().length > 0) {
-        e.preventDefault();
-        e.returnValue = '';
+    // 🌟 全面無差別退出防護（所有房間通用）
+    function handleBeforeUnload(e) {
+      if (editor && editor.value && editor.value.trim().length > 0) {
+        e = e || window.event;
+        const msg = "您輸入的逐字稿尚未匯出，確定要離開嗎？";
+        if (e) {
+          e.preventDefault();
+          e.returnValue = msg;
+        }
+        return msg;
       }
-    });
+    }
+    window.onbeforeunload = handleBeforeUnload;
+    window.addEventListener('beforeunload', handleBeforeUnload);
 
     function ensureTrailingBuffer() {
       let val = editor.value;
@@ -619,7 +625,6 @@
       }
     }
 
-    // 🌟 精確計算輸入欄最後一行的位置，將 END 線錨定在輸入欄底端
     function updateEndLinePosition() {
       if (!editor.value) return;
       const cs = window.getComputedStyle(editor);
@@ -1049,7 +1054,6 @@
       downloadBlob(new Blob(["\uFEFF" + wordHtml], { type: 'application/msword;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.doc`);
     }
 
-    // AI 語音收音引擎
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
@@ -1202,6 +1206,7 @@
 
       triggerFastSync(true);
       updateWordCount();
+      updateEndLinePosition();
       autoGrowTextarea();
     }
 
@@ -1239,6 +1244,7 @@
     ensureTrailingBuffer();
     applyLocalStyle();
     updateWordCount();
+    updateEndLinePosition();
   </script>
 </body>
 </html>
