@@ -1,202 +1,202 @@
 import os
-import uuid
-from flask import Flask, render_template, request, redirect, session, url_for
+import random
+import string
+import threading
+from flask import Flask, render_template, redirect, url_for, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from diff_match_patch import diff_match_patch
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "steno_private_secret_key_2026")
-SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "8888")
-app.config['SESSION_PERMANENT'] = False
+app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 伺服器端單一真相來源
-room_documents = {}  # room_id -> {"text": str, "version": int, "settings": dict}
-room_masters = {}    # room_id -> master_sid
-room_editors = {}    # room_id -> set of editor sids
-room_viewers = {}    # room_id -> set of viewer sids
+# 記憶體資料庫
+# rooms[room_id] = {
+#     "text": "",
+#     "settings": {"size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
+#     "master_sid": None,
+#     "editors": set(),
+#     "viewers": set()
+# }
+rooms = {}
 
-dmp = diff_match_patch()
+# 存放各房間的自動銷毀計時器：cleanup_timers[room_id] = Timer 物件
+cleanup_timers = {}
+CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘 = 1800 秒
 
-def get_room_doc(room_id):
-    if room_id not in room_documents:
-        room_documents[room_id] = {
-            "text": "",
-            "version": 0,
-            "settings": {
-                "size": 48,
-                "scale": 100,
-                "pad_x": 8,
-                "pad_y": 10
-            }
-        }
-    return room_documents[room_id]
 
-@app.before_request
-def require_login():
-    if request.endpoint in ['login', 'static']:
-        return None
-    if request.path.startswith('/view/'):
-        return None
-    if not session.get('authenticated'):
-        if request.endpoint and request.endpoint != 'login':
-            session['next_url'] = request.path
-        return redirect(url_for('login'))
+def schedule_room_cleanup(room_id):
+    """當房間全員離線時，啟動 30 分鐘倒數清空計時器"""
+    cancel_room_cleanup(room_id)
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    error = None
-    if request.method == 'POST':
-        user_input_pass = request.form.get('password', '')
-        if user_input_pass == SITE_PASSWORD:
-            session['authenticated'] = True
-            target_path = session.pop('next_url', None)
-            if not target_path or target_path == '/login':
-                return redirect('/')
-            return redirect(target_path)
-        else:
-            error = "密碼錯誤，請重新輸入！"
-    return render_template('login.html', error=error)
+    def cleanup_job():
+        if room_id in rooms:
+            total_connected = len(rooms[room_id].get("editors", set())) + len(rooms[room_id].get("viewers", set()))
+            if total_connected == 0:
+                print(f"[自動清理] 房間 {room_id} 已全員離線閒置 30 分鐘，執行記憶體清空銷毀。")
+                rooms.pop(room_id, None)
+        cleanup_timers.pop(room_id, None)
+
+    timer = threading.Timer(CLEANUP_TIMEOUT_SECONDS, cleanup_job)
+    timer.daemon = True
+    cleanup_timers[room_id] = timer
+    timer.start()
+    print(f"[倒數啟動] 房間 {room_id} 全員離線，若 30 分鐘內無人返回將自動銷毀釋放記憶體。")
+
+
+def cancel_room_cleanup(room_id):
+    """若有夥伴或觀眾重新進房，立即終止並取消銷毀計時器"""
+    timer = cleanup_timers.pop(room_id, None)
+    if timer:
+        timer.cancel()
+        print(f"[倒數取消] 房間 {room_id} 檢測到人員重新加入，取消自動銷毀。")
+
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
+
 @app.route('/edit/<room_id>')
-def edit_room(room_id):
+def edit(room_id):
     return render_template('edit.html', room_id=room_id)
 
+
 @app.route('/view/<room_id>')
-def view_room(room_id):
+def view(room_id):
     return render_template('view.html', room_id=room_id)
+
 
 @app.route('/new_room')
 def new_room():
-    unique_id = str(uuid.uuid4())[:8]
-    return redirect(f'/edit/{unique_id}')
+    random_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+    return redirect(url_for('edit', room_id=random_str))
 
-@app.errorhandler(404)
-def page_not_found(e):
-    return redirect('/')
 
+# SocketIO 協作事件監聽
 @socketio.on('join')
-def on_join(data):
-    room = data.get('room')
+def handle_join(data):
+    room_id = data.get('room')
     is_editor = data.get('is_editor', False)
     sid = request.sid
 
-    join_room(room)
-    doc = get_room_doc(room)
+    if not room_id:
+        return
+
+    # 若該房間原本處於離線銷毀倒數中，立刻解除倒數
+    cancel_room_cleanup(room_id)
+
+    if room_id not in rooms:
+        rooms[room_id] = {
+            "text": "",
+            "settings": {"size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
+            "master_sid": None,
+            "editors": set(),
+            "viewers": set()
+        }
+
+    join_room(room_id)
 
     if is_editor:
-        if room not in room_editors:
-            room_editors[room] = set()
-        room_editors[room].add(sid)
-
-        if room not in room_masters or room_masters[room] is None:
-            room_masters[room] = sid
+        rooms[room_id]["editors"].add(sid)
+        if rooms[room_id]["master_sid"] is None:
+            rooms[room_id]["master_sid"] = sid
     else:
-        # 觀眾端加入
-        if room not in room_viewers:
-            room_viewers[room] = set()
-        room_viewers[room].add(sid)
+        rooms[room_id]["viewers"].add(sid)
 
-    broadcast_role_status(room)
-
-    # 後登入者立即獲得伺服器最新全文與排版設定
+    # 發送當前文件狀態與設定給新進人員
     emit('init_document', {
-        'text': doc['text'],
-        'version': doc['version'],
-        'settings': doc['settings']
-    }, room=sid)
+        "text": rooms[room_id]["text"],
+        "settings": rooms[room_id]["settings"]
+    }, to=sid)
 
-@socketio.on('claim_master')
-def on_claim_master(data):
-    room = data.get('room')
-    sid = request.sid
-    if room in room_editors and sid in room_editors[room]:
-        room_masters[room] = sid
-        broadcast_role_status(room)
+    broadcast_roles_status(room_id)
+
 
 @socketio.on('sync_text')
-def on_sync_text(data):
-    room = data.get('room')
+def handle_sync_text(data):
+    room_id = data.get('room')
     sid = request.sid
-    doc = get_room_doc(room)
-    
-    incoming_text = data.get('text', '')
-    patch_text = data.get('patch', '')
-    
-    if patch_text and patch_text.strip():
-        try:
-            patches = dmp.patch_fromText(patch_text)
-            applied_text, _ = dmp.patch_apply(patches, doc['text'])
-            doc['text'] = applied_text
-        except Exception:
-            doc['text'] = incoming_text
-    else:
-        doc['text'] = incoming_text
 
-    doc['version'] += 1
-    
-    is_master = (room_masters.get(room) == sid)
+    if not room_id or room_id not in rooms:
+        return
+
+    # 收到任何打字操作時確認取消清理倒數
+    cancel_room_cleanup(room_id)
+
+    new_text = data.get('text', '')
+    rooms[room_id]["text"] = new_text
+
+    is_master = (sid == rooms[room_id].get("master_sid"))
     if is_master:
-        if 'size' in data: doc['settings']['size'] = data['size']
-        if 'scale' in data: doc['settings']['scale'] = data['scale']
-        if 'pad_x' in data: doc['settings']['pad_x'] = data['pad_x']
-        if 'pad_y' in data: doc['settings']['pad_y'] = data['pad_y']
+        rooms[room_id]["settings"]["size"] = data.get('size', 48)
+        rooms[room_id]["settings"]["scale"] = data.get('scale', 100)
+        rooms[room_id]["settings"]["pad_x"] = data.get('pad_x', 8)
+        rooms[room_id]["settings"]["pad_y"] = data.get('pad_y', 10)
 
-    data['text'] = doc['text']
     data['sender_sid'] = sid
     data['is_master'] = is_master
-    emit('sync_text', data, to=room, include_self=False)
+
+    emit('sync_text', data, to=room_id, include_self=False)
+
+
+@socketio.on('claim_master')
+def handle_claim_master(data):
+    room_id = data.get('room')
+    sid = request.sid
+    if room_id in rooms and sid in rooms[room_id]["editors"]:
+        rooms[room_id]["master_sid"] = sid
+        broadcast_roles_status(room_id)
+
 
 @socketio.on('cursor_move')
-def on_cursor_move(data):
-    room = data.get('room')
+def handle_cursor_move(data):
+    room_id = data.get('room')
     sid = request.sid
-    emit('cursor_update', {
-        'sid': sid,
-        'cursor_index': data.get('cursor_index', 0)
-    }, to=room, include_self=False)
+    if room_id in rooms:
+        emit('cursor_update', {
+            'sid': sid,
+            'cursor_index': data.get('cursor_index', 0)
+        }, to=room_id, include_self=False)
+
 
 @socketio.on('disconnect')
-def on_disconnect():
+def handle_disconnect():
     sid = request.sid
-    for room in list(set(list(room_editors.keys()) + list(room_viewers.keys()))):
-        need_broadcast = False
-        
-        # 檢查是否為聽打員離線
-        if room in room_editors and sid in room_editors[room]:
-            room_editors[room].remove(sid)
-            emit('cursor_remove', {'sid': sid}, to=room)
+    for room_id, rdata in list(rooms.items()):
+        modified = False
 
-            if room_masters.get(room) == sid:
-                if len(room_editors[room]) > 0:
-                    room_masters[room] = next(iter(room_editors[room]))
-                else:
-                    room_masters[room] = None
-            need_broadcast = True
+        if sid in rdata["editors"]:
+            rdata["editors"].remove(sid)
+            modified = True
+            emit('cursor_remove', {'sid': sid}, to=room_id)
 
-        # 檢查是否為觀眾離線
-        if room in room_viewers and sid in room_viewers[room]:
-            room_viewers[room].remove(sid)
-            need_broadcast = True
+            if rdata["master_sid"] == sid:
+                rdata["master_sid"] = next(iter(rdata["editors"])) if rdata["editors"] else None
 
-        if need_broadcast:
-            broadcast_role_status(room)
+        if sid in rdata["viewers"]:
+            rdata["viewers"].remove(sid)
+            modified = True
 
-def broadcast_role_status(room):
-    total_editors = len(room_editors.get(room, set()))
-    total_viewers = len(room_viewers.get(room, set()))
-    master = room_masters.get(room)
+        if modified:
+            broadcast_roles_status(room_id)
+            total_active = len(rdata["editors"]) + len(rdata["viewers"])
+            # 房間完全沒有人連線時，正式啟動 30 分鐘自動抹除倒數
+            if total_active == 0:
+                schedule_room_cleanup(room_id)
+
+
+def broadcast_roles_status(room_id):
+    if room_id not in rooms:
+        return
+    rdata = rooms[room_id]
     socketio.emit('role_status_update', {
-        'master_sid': master,
-        'total_editors': total_editors,
-        'total_viewers': total_viewers
-    }, to=room)
+        "master_sid": rdata["master_sid"],
+        "total_editors": len(rdata["editors"]),
+        "total_viewers": len(rdata["viewers"])
+    }, to=room_id)
+
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 10000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+    port = int(os.environ.get('PORT', 5000))
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
