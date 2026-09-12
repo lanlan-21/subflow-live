@@ -105,6 +105,8 @@
     .btn-purple:hover { background: #6d28d9; }
     .btn-export { background: #d97706; color: #fff; border: none; }
     .btn-export:hover { background: #b45309; }
+    .btn-danger { background: #dc2626; color: #fff; border: none; }
+    .btn-danger:hover { background: #b91c1c; }
     .btn-dark { background: #334155; color: #fff; border: none; }
     .btn-dark:hover { background: #475569; }
 
@@ -334,6 +336,34 @@
       justify-content: space-between;
       align-items: center;
       z-index: 100;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .status-left-box {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .save-alert-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 10px;
+      background: rgba(217, 119, 6, 0.2);
+      border: 1px solid #d97706;
+      border-radius: 12px;
+      color: #fde68a;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .save-alert-badge:hover {
+      background: rgba(217, 119, 6, 0.4);
+      color: #ffffff;
     }
 
     .status-right-box {
@@ -488,6 +518,11 @@
     <button class="btn btn-dark" onclick="toggleToolbar(false)">▲ 收起</button>
     <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
 
+    <!-- 🌟 一鍵清空畫布（帶雙重防呆警告） -->
+    <button class="btn btn-danger" onclick="confirmClearCanvas()">
+      🗑️ 清空畫布
+    </button>
+
     <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
       <button class="btn btn-purple" onclick="openQrModal()">📱 觀眾 QR Code</button>
 
@@ -528,7 +563,12 @@
   </div>
 
   <div class="statusbar">
-    <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
+    <div class="status-left-box">
+      <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
+      <div class="save-alert-badge" onclick="exportTxt(false)" title="點擊即可快速下載目前逐字稿">
+        ⚠️ 服務結束請務必下載檔案
+      </div>
+    </div>
     <div class="status-right-box">
       <div class="viewer-badge">
         <span>📺 觀眾在線：</span><strong id="viewerCountText" style="color: #93c5fd;">0</strong><span> 人</span>
@@ -586,7 +626,31 @@
     const BUFFER_LINES_COUNT = 6;
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
-    // 🌟 1. 退出防護
+    // 🌟 一鍵清空畫布與檔案刪除警告防呆
+    function confirmClearCanvas() {
+      const currentLength = editor.value.trim().length;
+      if (currentLength === 0) {
+        alert('目前畫布已經是空的，無需清空！');
+        return;
+      }
+
+      const warningMsg = `⚠️【嚴重警告：即將清空畫布】\n\n目前共有 ${currentLength} 個字。\n此操作將會清空整份逐字稿，且同步清除大螢幕與協作夥伴的畫面！\n\n請確認您是否已經「匯出下載」備份？\n確定要永久清空請按【確定】，取消請按【取消】。`;
+      
+      if (confirm(warningMsg)) {
+        // 清空文字並重設緩衝區
+        editor.value = '\n'.repeat(BUFFER_LINES_COUNT);
+        editor.setSelectionRange(0, 0);
+        shadowText = "";
+        
+        // 立即觸發全場同步
+        triggerFastSync(true);
+        updateWordCount();
+        autoGrowTextarea();
+        updateEndLinePosition();
+        editor.focus();
+      }
+    }
+
     function handleBeforeUnload(e) {
       if (editor && editor.value && editor.value.trim().length > 0) {
         e = e || window.event;
@@ -595,7 +659,6 @@
           e.preventDefault();
           e.returnValue = msg;
         }
-        // 使用者點選取消留在頁面時，啟動深度重構救援
         scheduleImeDeepRebuild();
         return msg;
       }
@@ -603,25 +666,20 @@
     window.onbeforeunload = handleBeforeUnload;
     window.addEventListener('beforeunload', handleBeforeUnload);
 
-    // 🌟 2. 深度重建 DOM 節點以徹底復活 Windows IME（微軟注音）
     function rebuildEditorNode() {
       if (!editor || !editor.parentNode) return;
       const curStart = editor.selectionStart;
       const curEnd = editor.selectionEnd;
       const textVal = editor.value;
 
-      // 複製現有輸入框的所有樣式與屬性
       const newEditor = editor.cloneNode(false);
       newEditor.value = textVal;
 
-      // 替換舊節點（強迫 Windows 作業系統註冊全新的 TSF 輸入法 Context）
       editor.parentNode.replaceChild(newEditor, editor);
       editor = newEditor;
 
-      // 重新綁定所有事件監聽
       bindEditorEvents();
 
-      // 還原游標與焦點
       applyLocalStyle();
       editor.focus();
       editor.setSelectionRange(curStart, curEnd);
@@ -634,7 +692,6 @@
     }
 
     window.addEventListener('focus', () => {
-      // 點回視窗時若有必要亦可執行平順焦點保全
       if (editor) editor.focus();
     });
 
