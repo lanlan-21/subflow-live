@@ -199,4 +199,5 @@ def broadcast_roles_status(room_id):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    # 加上 allow_unsafe_werkzeug=True 以放行 Render 雲端環境啟動
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
