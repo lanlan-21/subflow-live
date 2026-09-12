@@ -189,10 +189,10 @@
       border: none;
       outline: none;
       resize: none;
-      padding: 16px 8px 120px 8px;
+      padding: 16px 8px 300px 8px;
       font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
       font-size: 48px;
-      line-height: 1.1;
+      line-height: 1.15;
       letter-spacing: 0px;
       color: #ffff33;
       background: transparent;
@@ -616,16 +616,17 @@
     let amIMaster = true;
     let currentMasterSid = null;
     let isComposing = false;
-    let fastSyncTimer = null;
     let isApplyingRemote = false;
+    let currentDocVersion = 0;
+
+    // 🌟 核心：暫存佇列（當本機正在敲字/選字時，外部更新先暫存不干擾輸入法）
+    const pendingRemoteQueue = [];
 
     const remoteCursors = new Map();
     const dmp = new diff_match_patch();
     let shadowText = "";
-    const BUFFER_LINES_COUNT = 6;
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
-    // 🌟 本地飛行記錄黑盒子（LocalStorage 快照鍵名）
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
 
@@ -633,8 +634,8 @@
       clearTimeout(localSaveDebounce);
       localSaveDebounce = setTimeout(() => {
         try {
-          const raw = editor.value.trimEnd();
-          if (raw.trim().length > 0) {
+          const raw = editor.value;
+          if (raw && raw.trim().length > 0) {
             localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify({
               text: raw,
               time: Date.now()
@@ -654,15 +655,15 @@
         const serverLen = (serverText || "").trim().length;
         const localLen = savedData.text.trim().length;
 
-        // 當伺服器內容明顯比本地暫存少，且本地有實質文字時詢問還原
         if (localLen > 5 && serverLen === 0) {
           const formattedTime = new Date(savedData.time).toLocaleTimeString('zh-TW');
           const restoreConfirm = confirm(`💡【災難還原提醒】\n\n檢測到您本機留有剛才未匯出的打字記錄：\n- 儲存時間：約 ${formattedTime}\n- 內容長度：${localLen} 字\n\n請問是否一鍵還原到畫布並同步？\n【確定】：立刻還原\n【取消】：捨棄舊記錄使用新畫布`);
           
           if (restoreConfirm) {
-            editor.value = savedData.text + '\n'.repeat(BUFFER_LINES_COUNT);
+            editor.value = savedData.text;
+            shadowText = savedData.text;
             editor.setSelectionRange(savedData.text.length, savedData.text.length);
-            triggerFastSync(true);
+            sendRealtimeSync();
             updateWordCount();
             autoGrowTextarea();
             updateEndLinePosition();
@@ -681,12 +682,12 @@
       const warningMsg = `⚠️【嚴重警告：即將清空畫布】\n\n目前共有 ${currentLength} 個字。\n此操作將會清空整份逐字稿，且同步清除大螢幕與協作夥伴的畫面！\n\n請確認您是否已經「匯出下載」備份？\n確定要永久清空請按【確定】，取消請按【取消】。`;
       
       if (confirm(warningMsg)) {
-        editor.value = '\n'.repeat(BUFFER_LINES_COUNT);
+        editor.value = '';
         editor.setSelectionRange(0, 0);
         shadowText = "";
         try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {}
         
-        triggerFastSync(true);
+        sendRealtimeSync();
         updateWordCount();
         autoGrowTextarea();
         updateEndLinePosition();
@@ -738,32 +739,15 @@
       if (editor) editor.focus();
     });
 
-    function ensureTrailingBuffer() {
-      let val = editor.value;
-      let count = 0;
-      for (let i = val.length - 1; i >= 0; i--) {
-        if (val[i] === '\n') count++;
-        else break;
-      }
-      if (count < BUFFER_LINES_COUNT) {
-        const curStart = editor.selectionStart;
-        const curEnd = editor.selectionEnd;
-        editor.value = val + '\n'.repeat(BUFFER_LINES_COUNT - count);
-        editor.setSelectionRange(curStart, curEnd);
-      }
-      autoGrowTextarea();
-      updateEndLinePosition();
-    }
-
     function autoGrowTextarea() {
-      const minHeight = editorContainer.clientHeight + 400;
+      const minHeight = editorContainer.clientHeight + 200;
       if (editor.scrollHeight > editor.clientHeight || editor.clientHeight < minHeight) {
         editor.style.height = Math.max(editor.scrollHeight, minHeight) + 'px';
       }
     }
 
     function updateEndLinePosition() {
-      if (!editor || !editor.value) return;
+      if (!editor) return;
       const cs = window.getComputedStyle(editor);
 
       mirrorDiv.style.fontFamily = cs.fontFamily;
@@ -778,7 +762,7 @@
       mirrorDiv.style.width = editor.clientWidth + 'px';
 
       mirrorDiv.innerHTML = '';
-      mirrorDiv.appendChild(document.createTextNode(editor.value));
+      mirrorDiv.appendChild(document.createTextNode(editor.value || ''));
       
       const bottomProbe = document.createElement('span');
       bottomProbe.textContent = '\u200b';
@@ -802,10 +786,12 @@
       isApplyingRemote = true;
       editor.value = data.text || '';
       shadowText = editor.value;
-      ensureTrailingBuffer();
+      currentDocVersion = data.version || 0;
       updateWordCount();
+      autoGrowTextarea();
+      updateEndLinePosition();
 
-      if (data.settings) {
+      if (data.settings && amIMaster) {
         if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
         if (data.settings.scale !== undefined) scaleInput.value = data.settings.scale;
         if (data.settings.pad_x !== undefined) padXInput.value = data.settings.pad_x;
@@ -814,7 +800,6 @@
       }
       isApplyingRemote = false;
 
-      // 檢查本機是否有快照可供還原
       checkLocalBlackboxRestore(data.text);
     });
 
@@ -837,11 +822,11 @@
       if (amIMaster) {
         masterToggleBtn.className = "btn btn-master-role active";
         masterToggleBtn.innerText = totalEditors <= 1 ? "🔒 主投影 (單人)" : "🔒 主投影 (主控中)";
-        modeHintText.innerText = "身分：【主投影控制台】";
+        modeHintText.innerText = "身分：【主投影控制台】控制大螢幕排版";
       } else {
         masterToggleBtn.className = "btn btn-master-role inactive";
         masterToggleBtn.innerText = "👑 點擊接管主投影";
-        modeHintText.innerText = "身分：【個人檢視】自由縮放，不影響投影幕";
+        modeHintText.innerText = "身分：【獨立協作視圖】字級比例各自獨立";
       }
       updateAllCursorTags();
     });
@@ -852,18 +837,22 @@
     }
 
     function bindEditorEvents() {
-      editor.addEventListener('compositionstart', () => { isComposing = true; });
+      editor.addEventListener('compositionstart', () => { 
+        isComposing = true; 
+      });
+      
       editor.addEventListener('compositionend', () => {
         isComposing = false;
-        ensureTrailingBuffer();
-        triggerFastSync(true);
+        // 組字完成，立即發布本地變更
+        sendRealtimeSync();
         saveToLocalBlackbox();
+        // 將組字期間累積的外部補丁逐一安全消化
+        flushPendingQueue();
       });
 
       editor.addEventListener('input', () => {
-        if (!isApplyingRemote) {
-          ensureTrailingBuffer();
-          triggerFastSync();
+        if (!isApplyingRemote && !isComposing) {
+          sendRealtimeSync();
           saveToLocalBlackbox();
         }
       });
@@ -877,20 +866,10 @@
     }
     bindEditorEvents();
 
-    function triggerFastSync(immediate = false) {
-      updateWordCount();
-      updateEndLinePosition();
-      if (immediate) {
-        clearTimeout(fastSyncTimer);
-        sendRealtimeSync();
-        return;
-      }
-      clearTimeout(fastSyncTimer);
-      fastSyncTimer = setTimeout(sendRealtimeSync, 30);
-    }
-
     function sendRealtimeSync() {
       const currentText = editor.value;
+      if (currentText === shadowText) return;
+
       const patchList = dmp.patch_make(shadowText, currentText);
       const patchText = dmp.patch_toText(patchList);
       shadowText = currentText;
@@ -908,63 +887,95 @@
         pad_x: parseInt(padXInput.value, 10) || 8,
         pad_y: parseInt(padYInput.value, 10) || 10
       });
+
+      updateWordCount();
+      updateEndLinePosition();
+      autoGrowTextarea();
+    }
+
+    function flushPendingQueue() {
+      while (pendingRemoteQueue.length > 0) {
+        const item = pendingRemoteQueue.shift();
+        applySingleRemoteDelta(item);
+      }
     }
 
     socket.on('sync_text', data => {
       if (!data || data.sender_sid === socket.id) return;
-      if (typeof data.text === 'string') {
-        const curPos = editor.selectionStart;
-        const oldText = editor.value;
-        if (oldText !== data.text) {
-          isApplyingRemote = true;
-          let patched = false;
-          if (data.patch && data.patch.trim().length > 0) {
-            try {
-              const patches = dmp.patch_fromText(data.patch);
-              let cursorOffset = 0;
-              for (let p of patches) {
-                if (p.start1 < curPos) cursorOffset += (p.length2 - p.length1);
-              }
-              const results = dmp.patch_apply(patches, oldText);
-              if (results[1].some(ok => ok)) {
-                editor.value = results[0];
-                shadowText = results[0];
-                const newPos = Math.max(0, Math.min(curPos + cursorOffset, editor.value.length));
-                if (!isComposing) editor.setSelectionRange(newPos, newPos);
-                patched = true;
-              }
-            } catch(e) {}
-          }
-          if (!patched) {
-            const diff = data.text.length - oldText.length;
-            editor.value = data.text;
-            shadowText = data.text;
-            if (!isComposing) {
-              const newPos = Math.max(0, Math.min(curPos + diff, data.text.length));
-              editor.setSelectionRange(newPos, newPos);
-            }
-          }
-          ensureTrailingBuffer();
-          updateWordCount();
-          updateEndLinePosition();
-          saveToLocalBlackbox();
-          
-          if (data.cursor_index !== undefined) {
-            updateRemoteCursor(data.sender_sid, data.cursor_index);
-          }
-          setTimeout(() => { isApplyingRemote = false; }, 10);
-        } else if (data.cursor_index !== undefined) {
+
+      // 正在打注音選字時，封包排隊進 Queue，絕不讓選字框崩掉
+      if (isComposing) {
+        pendingRemoteQueue.push(data);
+        if (data.cursor_index !== undefined) {
           updateRemoteCursor(data.sender_sid, data.cursor_index);
         }
+        return;
       }
-      if (!amIMaster && data.is_master) {
-        if (data.size) document.getElementById('fontSizeInput').value = data.size;
-        if (data.scale !== undefined) scaleInput.value = data.scale;
-        if (data.pad_x !== undefined) padXInput.value = data.pad_x;
-        if (data.pad_y !== undefined) padYInput.value = data.pad_y;
-        applyLocalStyle();
-      }
+
+      applySingleRemoteDelta(data);
     });
+
+    // 🌟 精確差量合併與相對游標錨定演算法
+    function applySingleRemoteDelta(data) {
+      if (typeof data.text !== 'string') return;
+
+      const curStart = editor.selectionStart;
+      const curEnd = editor.selectionEnd;
+      const oldText = editor.value;
+
+      if (oldText === data.text) {
+        if (data.cursor_index !== undefined) {
+          updateRemoteCursor(data.sender_sid, data.cursor_index);
+        }
+        return;
+      }
+
+      isApplyingRemote = true;
+      let applied = false;
+
+      if (data.patch && data.patch.trim().length > 0) {
+        try {
+          const patches = dmp.patch_fromText(data.patch);
+
+          // 計算對方的補丁在當前游標前方造成的長度差
+          let offsetDelta = 0;
+          for (let p of patches) {
+            if (p.start1 <= curStart) {
+              offsetDelta += (p.length2 - p.length1);
+            }
+          }
+
+          const results = dmp.patch_apply(patches, oldText);
+          if (results[1].some(ok => ok)) {
+            editor.value = results[0];
+            shadowText = results[0];
+
+            // 游標原地咬住（不隨便跳開）
+            const newPos = Math.max(0, Math.min(curStart + offsetDelta, editor.value.length));
+            editor.setSelectionRange(newPos, newPos);
+            applied = true;
+          }
+        } catch(e) {}
+      }
+
+      if (!applied) {
+        editor.value = data.text;
+        shadowText = data.text;
+        const newPos = Math.max(0, Math.min(curStart, data.text.length));
+        editor.setSelectionRange(newPos, newPos);
+      }
+
+      updateWordCount();
+      updateEndLinePosition();
+      autoGrowTextarea();
+      saveToLocalBlackbox();
+
+      if (data.cursor_index !== undefined) {
+        updateRemoteCursor(data.sender_sid, data.cursor_index);
+      }
+
+      setTimeout(() => { isApplyingRemote = false; }, 10);
+    }
 
     let lastSentCursor = -1;
     function broadcastCursorOnly() {
@@ -1112,7 +1123,7 @@
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
       editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      editor.style.padding = `${py} ${px} 120px ${px}`;
+      editor.style.padding = `${py} ${px} 300px ${px}`;
       if ('zoom' in editor.style) {
         editor.style.zoom = scaleVal;
       } else {
@@ -1124,7 +1135,11 @@
       updateEndLinePosition();
     }
 
-    function applyAndSync() { applyLocalStyle(); triggerFastSync(true); }
+    function applyAndSync() { 
+      applyLocalStyle(); 
+      sendRealtimeSync(); 
+    }
+    
     function stepScale(delta) { scaleInput.value = Math.min(Math.max((parseInt(scaleInput.value, 10) || 100) + delta, 40), 250); applyAndSync(); }
     function stepPadX(delta) { padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta); applyAndSync(); }
     function stepPadY(delta) { padYInput.value = Math.max(0, (parseInt(padYInput.value, 10) || 0) + delta); applyAndSync(); }
@@ -1338,23 +1353,18 @@
       const userCurStart = editor.selectionStart;
       const userCurEnd = editor.selectionEnd;
       let val = editor.value;
-      let realEnd = val.trimEnd().length;
 
-      let existing = val.slice(0, realEnd);
-      let nextText = existing + deltaText;
-      editor.value = nextText + '\n'.repeat(BUFFER_LINES_COUNT);
+      let nextText = val + deltaText;
+      editor.value = nextText;
 
-      if (userCurStart < realEnd) {
+      if (userCurStart < val.length) {
         editor.setSelectionRange(userCurStart, userCurEnd);
       } else {
         const endPos = nextText.length;
         editor.setSelectionRange(endPos, endPos);
       }
 
-      triggerFastSync(true);
-      updateWordCount();
-      updateEndLinePosition();
-      autoGrowTextarea();
+      sendRealtimeSync();
       saveToLocalBlackbox();
     }
 
@@ -1389,7 +1399,6 @@
       sessionCommittedText = '';
     }
 
-    ensureTrailingBuffer();
     applyLocalStyle();
     updateWordCount();
     updateEndLinePosition();
