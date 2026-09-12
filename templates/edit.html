@@ -9,7 +9,7 @@
   <style>
     * { box-sizing: border-box; }
     
-    /* 🌟 主題色系：加入溫和護眼豆沙綠配黑字 */
+    /* 🌟 主題色系定義：淡綠護眼配深黑字 */
     body[data-theme="dark"] {
       --bg-main: #0a0a0a;
       --bg-editor: #121212;
@@ -19,7 +19,7 @@
     body[data-theme="green"] {
       --bg-main: #c7edcc;      /* 經典護眼豆沙綠外底 */
       --bg-editor: #d2edd2;    /* 柔和護眼內底 */
-      --text-color: #111827;   /* 高對比炭黑字 */
+      --text-color: #111827;   /* 高對比純黑字 */
       --caret-color: #047857;  /* 墨綠色游標 */
     }
     body[data-theme="navy"] {
@@ -524,14 +524,14 @@
       🎙️ 語音辨識
     </button>
 
-    <!-- 🌟 最前排：底色切換（內建護眼淡綠） -->
+    <!-- 🌟 最前排：底色切換 -->
     <div class="control-group" style="background: #27272a; padding: 3px 8px; border-radius: 6px; border: 1px solid #38bdf8;">
       <label for="themeSelect" style="font-weight: bold; color: #38bdf8;">🎨 編輯區底色：</label>
       <select id="themeSelect" onchange="changeTheme(this.value)" style="font-weight: bold; cursor: pointer; color: #fff;">
-        <option value="dark">⬛ 極致黑底 (經典黃字)</option>
-        <option value="green">🍵 護眼淡綠 (黑字舒適)</option>
+        <option value="dark">⬛ 極致黑底 (黃字)</option>
+        <option value="green">🍵 護眼淡綠 (黑字)</option>
         <option value="navy">🟦 深海藍 (灰白字)</option>
-        <option value="light">⬜ 純白底 (黑字模式)</option>
+        <option value="light">⬜ 純白底 (黑字)</option>
       </select>
     </div>
 
@@ -685,7 +685,6 @@
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
 
-    // 🌟 主題切換與本機記憶
     function changeTheme(themeName) {
       document.body.setAttribute('data-theme', themeName);
       try {
@@ -756,7 +755,15 @@
         shadowText = "";
         try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {}
         
-        sendRealtimeSync();
+        socket.emit('sync_text', {
+          room: roomId,
+          text: '',
+          clean_text: '',
+          patch: '',
+          cursor_index: 0,
+          is_clear: true
+        });
+
         updateWordCount();
         autoGrowTextarea();
         updateEndLinePosition();
@@ -902,7 +909,6 @@
       socket.emit('claim_master', { room: roomId });
     }
 
-    // 🌟 核心：打字逐字即時回傳（讓夥伴看見組字過程）
     function bindEditorEvents() {
       editor.addEventListener('compositionstart', () => { 
         isComposing = true; 
@@ -981,7 +987,15 @@
     socket.on('sync_text', data => {
       if (!data || data.sender_sid === socket.id) return;
 
-      // 若本機正在組字（選字），封包排隊進 Queue，避免注音選字框崩潰
+      if (data.is_clear) {
+        editor.value = '';
+        shadowText = '';
+        updateWordCount();
+        updateEndLinePosition();
+        autoGrowTextarea();
+        return;
+      }
+
       if (isComposing) {
         pendingRemoteQueue.push(data);
         if (data.cursor_index !== undefined) {
@@ -993,16 +1007,15 @@
       applySingleRemoteDelta(data);
     });
 
-    // 🌟 徹底杜絕跳字：基於精確前後綴（Prefix/Suffix）字元差量替換與游標錨定
+    // 🌟 核心防跳字：DMP 三向合併 + 精確相對位移
     function applySingleRemoteDelta(data) {
       if (typeof data.text !== 'string') return;
 
       const curStart = editor.selectionStart;
       const curEnd = editor.selectionEnd;
       const oldText = editor.value;
-      const remoteText = data.text;
 
-      if (oldText === remoteText) {
+      if (oldText === data.text) {
         if (data.cursor_index !== undefined) {
           updateRemoteCursor(data.sender_sid, data.cursor_index, '');
         }
@@ -1010,47 +1023,39 @@
       }
 
       isApplyingRemote = true;
+      let applied = false;
 
-      // 1. 尋找公共前綴
-      let prefixLen = 0;
-      const maxPrefix = Math.min(oldText.length, remoteText.length);
-      while (prefixLen < maxPrefix && oldText[prefixLen] === remoteText[prefixLen]) {
-        prefixLen++;
+      if (data.patch && data.patch.trim().length > 0) {
+        try {
+          const patches = dmp.patch_fromText(data.patch);
+
+          let offset = 0;
+          for (const p of patches) {
+            if (p.start1 <= curStart) {
+              offset += (p.length2 - p.length1);
+            }
+          }
+
+          const shadowResults = dmp.patch_apply(patches, shadowText);
+          shadowText = shadowResults[0];
+
+          const editorResults = dmp.patch_apply(patches, oldText);
+          editor.value = editorResults[0];
+
+          // 游標錨定：在前方則位移，在後方則維持 0 位移不亂跳
+          const newPos = Math.max(0, Math.min(curStart + offset, editor.value.length));
+          editor.setSelectionRange(newPos, newPos);
+          applied = true;
+        } catch(e) {}
       }
 
-      // 2. 尋找公共後綴
-      let suffixLen = 0;
-      const maxSuffix = Math.min(oldText.length - prefixLen, remoteText.length - prefixLen);
-      while (suffixLen < maxSuffix && oldText[oldText.length - 1 - suffixLen] === remoteText[remoteText.length - 1 - suffixLen]) {
-        suffixLen++;
+      if (!applied) {
+        if (oldText.length === 0) {
+          editor.value = data.text;
+          shadowText = data.text;
+          editor.setSelectionRange(0, 0);
+        }
       }
-
-      // 3. 計算本次夥伴更動的精確區間
-      const oldChangeLen = oldText.length - prefixLen - suffixLen;
-      const newChangeLen = remoteText.length - prefixLen - suffixLen;
-      const lengthDiff = newChangeLen - oldChangeLen;
-
-      // 4. 計算本機游標新位置（游標錨定矩陣）
-      let newCurStart = curStart;
-      let newCurEnd = curEnd;
-
-      if (curStart <= prefixLen) {
-        // 夥伴在我的游標後方打字：本機游標完全不需要移動（0 位移，絕不亂跳）
-      } else if (curStart >= prefixLen + oldChangeLen) {
-        // 夥伴在我的游標前方打字：本機游標僅順移長度差
-        newCurStart = Math.max(0, curStart + lengthDiff);
-        newCurEnd = Math.max(0, curEnd + lengthDiff);
-      } else {
-        // 極端碰撞：雙方在同一字元位置打字，游標推到該段變更末端
-        newCurStart = prefixLen + newChangeLen;
-        newCurEnd = newCurStart;
-      }
-
-      // 5. 採用原生 Selection Range 局部替換（保留瀏覽器 DOM 狀態）
-      editor.value = remoteText;
-      shadowText = remoteText;
-
-      editor.setSelectionRange(newCurStart, newCurEnd);
 
       updateWordCount();
       updateEndLinePosition();
