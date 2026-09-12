@@ -2,290 +2,176 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>即時字幕 - 頻道 {{ room_id }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>聽打即時投影看板 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- 🌟 引入開源繁體字型，確保手機端（iOS/Android）無內建標楷體時也能完美呈現楷體風格 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;900&family=Shippori+Mincho:wght@700&display=swap" rel="stylesheet">
+
   <style>
-    * { 
-      box-sizing: border-box; 
-      -webkit-user-select: none;
-      user-select: none;
-      font-family: "DFKai-SB", "BiauKai", "標楷體", "TW-Kai", serif !important;
-    }
+    * { box-sizing: border-box; }
     html, body {
-      margin: 0 !important;
-      padding: 0 !important;
+      margin: 0;
+      padding: 0;
       width: 100vw;
       height: 100vh;
-      background-color: #121212;
-      color: #ffff33;
-      overflow-x: hidden;
-      overflow-y: auto;
-      scrollbar-width: none;
+      background-color: #000000;
+      overflow: hidden;
     }
-    body::-webkit-scrollbar { display: none; }
-    
-    #captionContent {
+
+    #boardContainer {
       width: 100%;
-      min-height: 100vh;
-      padding: 10px 8px 70px 8px;
+      height: 100%;
+      overflow-y: scroll;
+      overflow-x: hidden;
+      scroll-behavior: smooth;
+    }
+
+    #contentBoard {
+      width: 100%;
+      min-height: 100%;
+      /* 🌟 字型優先順序：電腦本機標楷體 -> 蘋果楷體 -> 手機雲端繁體襯線/楷體 */
+      font-family: "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "KaiTi", "Noto Serif TC", serif;
       font-size: 48px;
-      line-height: 1.1;
+      line-height: 1.15;
+      letter-spacing: 0px;
+      color: #ffff33;
       white-space: pre-wrap;
       word-break: break-all;
       text-align: justify;
+      padding: 16px 12px 120px 12px;
       transform-origin: top left;
-      cursor: default;
+      transition: font-size 0.1s ease, padding 0.1s ease;
     }
 
-    .top-hover-sensor {
-      position: fixed;
-      top: 0;
-      right: 0;
-      width: 160px;
-      height: 70px;
-      z-index: 1000;
-    }
-
-    .hover-info-badge {
+    /* 懸浮工具條：供現場投影手動應急縮放/全螢幕 */
+    .view-toolbar {
       position: fixed;
       top: 12px;
       right: 12px;
-      background: rgba(20, 20, 20, 0.94);
-      border: 1px solid rgba(255, 255, 255, 0.2);
-      backdrop-filter: blur(10px);
-      padding: 14px;
-      border-radius: 12px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
-      font-size: 13px;
-      color: #e2e8f0;
-      opacity: 0;
-      pointer-events: none;
-      transform: translateY(-8px);
-      transition: opacity 0.25s ease, transform 0.25s ease;
-      z-index: 999;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
-      text-align: center;
-    }
-
-    .top-hover-sensor:hover + .hover-info-badge,
-    .hover-info-badge:hover,
-    .hover-info-badge.show-fixed {
-      opacity: 1;
-      pointer-events: auto;
-      transform: translateY(0);
-    }
-
-    .status-dot {
-      display: inline-block;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #22c55e;
-      margin-right: 6px;
-    }
-    
-    #viewQrBox {
-      background: #fff;
-      padding: 6px;
-      border-radius: 8px;
-      display: inline-block;
-      margin: 8px 0;
-    }
-
-    .badge-url {
-      font-size: 11px;
-      color: #38bdf8;
-      word-break: break-all;
-      max-width: 150px;
-    }
-
-    .audience-zoom-pill {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
       display: flex;
-      align-items: center;
       gap: 6px;
-      background: rgba(24, 24, 27, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      backdrop-filter: blur(8px);
-      padding: 6px 12px;
-      border-radius: 30px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+      opacity: 0.15;
+      transition: opacity 0.25s;
       z-index: 1000;
-      opacity: 0;
-      pointer-events: none;
-      transform: translateY(10px);
-      transition: opacity 0.3s ease, transform 0.3s ease;
     }
-    .audience-zoom-pill.visible {
+    .view-toolbar:hover {
       opacity: 1;
-      pointer-events: auto;
-      transform: translateY(0);
     }
-
-    .zoom-btn {
-      background: #3f3f46;
-      border: none;
-      color: #f4f4f5;
-      width: 34px;
-      height: 34px;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 15px;
-      font-weight: bold;
+    .btn-tool {
+      background: rgba(30, 41, 59, 0.85);
+      border: 1px solid #475569;
+      color: #f8fafc;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 12px;
       cursor: pointer;
+      backdrop-filter: blur(4px);
     }
-    .zoom-value {
-      font-size: 13px;
-      font-weight: 600;
-      color: #e4e4e7;
-      min-width: 48px;
-      text-align: center;
-      cursor: pointer;
+    .btn-tool:hover {
+      background: #2563eb;
+      border-color: #3b82f6;
     }
   </style>
 </head>
 <body>
 
-  <div class="top-hover-sensor" id="hoverSensor"></div>
-  <div class="hover-info-badge" id="infoBadge">
-    <div><span class="status-dot" id="netDot"></span><strong>頻道 {{ room_id }} 觀眾看版</strong></div>
-    <div id="viewQrBox"></div>
-    <div class="badge-url" id="liveUrl"></div>
+  <div class="view-toolbar">
+    <button class="btn-tool" onclick="adjustScale(5)">放大 (+5%)</button>
+    <button class="btn-tool" onclick="adjustScale(-5)">縮小 (-5%)</button>
+    <button class="btn-tool" onclick="toggleFullscreen()">⛶ 全螢幕</button>
   </div>
 
-  <div id="captionContent"></div>
-
-  <div class="audience-zoom-pill" id="zoomPill">
-    <button class="zoom-btn" onclick="adjustPersonalScale(-10)" title="縮小">A⁻</button>
-    <span class="zoom-value" id="zoomValText" onclick="resetPersonalScale()" title="還原與主控同比例">100%</span>
-    <button class="zoom-btn" onclick="adjustPersonalScale(10)" title="放大">A⁺</button>
+  <div id="boardContainer">
+    <div id="contentBoard">載入連線中...</div>
   </div>
 
   <script>
-    const socket = io();
+    const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     const roomId = "{{ room_id }}";
-    const box = document.getElementById('captionContent');
-    const netDot = document.getElementById('netDot');
-    const zoomPill = document.getElementById('zoomPill');
-    const zoomValText = document.getElementById('zoomValText');
-    const infoBadge = document.getElementById('infoBadge');
+    const board = document.getElementById('contentBoard');
+    const container = document.getElementById('boardContainer');
 
-    const liveUrlStr = window.location.href;
-    document.getElementById('liveUrl').innerText = liveUrlStr;
+    let currentScale = 100;
+    let autoScrollEnabled = true;
 
-    new QRCode(document.getElementById('viewQrBox'), {
-      text: liveUrlStr,
-      width: 110,
-      height: 110,
-      colorDark : "#0f172a",
-      colorLight : "#ffffff",
-      correctLevel : QRCode.CorrectLevel.M
+    // 檢測使用者是否手動向上滾動（暫停自動跟隨到底部）
+    container.addEventListener('scroll', () => {
+      const isAtBottom = (container.scrollHeight - container.scrollTop - container.clientHeight) < 80;
+      autoScrollEnabled = isAtBottom;
     });
 
-    let masterBaseScale = 100;
-    let personalZoom = 100;
-    let pillTimer = null;
+    socket.on('connect', () => {
+      socket.emit('join', { room: roomId, is_editor: false });
+    });
 
-    applyCombinedScale();
-
-    socket.emit('join', { room: roomId, is_editor: false });
-    socket.on('connect', () => { netDot.style.background = '#22c55e'; });
-    socket.on('disconnect', () => { netDot.style.background = '#ef4444'; });
-
-    // 初次進來立即從伺服器拉取最新完整文稿
     socket.on('init_document', data => {
       if (!data) return;
-      box.innerText = (data.text || '').trimEnd();
-      if (data.settings) updateStyle(data.settings);
-      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      board.innerText = data.text || '';
+      if (data.settings) applyStyleSettings(data.settings);
+      scrollToBottom();
     });
 
-    // 接收即時文字同步
     socket.on('sync_text', data => {
       if (!data) return;
-      const displayText = data.clean_text !== undefined ? data.clean_text : data.text;
-      if (typeof displayText === 'string') {
-        box.innerText = displayText;
-        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      if (typeof data.text === 'string') {
+        board.innerText = data.text;
       }
-      box.style.fontFamily = '"DFKai-SB", "BiauKai", "標楷體", "TW-Kai", serif';
-      if (data.size) box.style.fontSize = data.size + 'px';
-      if (data.pad_x !== undefined && data.pad_y !== undefined) {
-        box.style.padding = `${data.pad_y}px ${data.pad_x}px 70px ${data.pad_x}px`;
+      if (data.is_master) {
+        applyStyleSettings({
+          size: data.size,
+          scale: data.scale,
+          pad_x: data.pad_x,
+          pad_y: data.pad_y
+        });
       }
-      if (data.scale !== undefined) {
-        masterBaseScale = data.scale;
-        applyCombinedScale();
-      }
+      if (autoScrollEnabled) scrollToBottom();
     });
 
-    function updateStyle(s) {
-      box.style.fontFamily = '"DFKai-SB", "BiauKai", "標楷體", "TW-Kai", serif';
-      if (s.size) box.style.fontSize = s.size + 'px';
-      if (s.pad_x !== undefined && s.pad_y !== undefined) {
-        box.style.padding = `${s.pad_y}px ${s.pad_x}px 70px ${s.pad_x}px`;
-      }
-      if (s.scale !== undefined) {
-        masterBaseScale = s.scale;
-        applyCombinedScale();
+    function applyStyleSettings(settings) {
+      if (!settings) return;
+      if (settings.size) board.style.fontSize = settings.size + 'px';
+      
+      const px = (settings.pad_x !== undefined ? settings.pad_x : 8) + 'px';
+      const py = (settings.pad_y !== undefined ? settings.pad_y : 10) + 'px';
+      board.style.padding = `${py} ${px} 120px ${px}`;
+
+      if (settings.scale !== undefined) {
+        currentScale = settings.scale;
+        const scaleVal = currentScale / 100;
+        if ('zoom' in board.style) {
+          board.style.zoom = scaleVal;
+        } else {
+          board.style.transform = `scale(${scaleVal})`;
+          board.style.width = `${100 / scaleVal}%`;
+        }
       }
     }
 
-    function applyCombinedScale() {
-      const finalPercent = Math.round((masterBaseScale * personalZoom) / 100);
-      zoomValText.innerText = personalZoom + '%';
-      const s = finalPercent / 100;
-      if ('zoom' in box.style) {
-        box.style.zoom = s;
+    function scrollToBottom() {
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function adjustScale(delta) {
+      currentScale = Math.min(Math.max(currentScale + delta, 40), 250);
+      const scaleVal = currentScale / 100;
+      if ('zoom' in board.style) {
+        board.style.zoom = scaleVal;
       } else {
-        box.style.transform = `scale(${s})`;
+        board.style.transform = `scale(${scaleVal})`;
+        board.style.width = `${100 / scaleVal}%`;
       }
     }
 
-    function adjustPersonalScale(delta) {
-      personalZoom = Math.min(Math.max(personalZoom + delta, 50), 200);
-      applyCombinedScale();
-      showPillTemporarily();
-    }
-
-    function resetPersonalScale() {
-      personalZoom = 100;
-      applyCombinedScale();
-      showPillTemporarily();
-    }
-
-    function showPillTemporarily() {
-      zoomPill.classList.add('visible');
-      clearTimeout(pillTimer);
-      pillTimer = setTimeout(() => { zoomPill.classList.remove('visible'); }, 3500);
-    }
-
-    document.addEventListener('click', (e) => { 
-      if (!zoomPill.contains(e.target) && !infoBadge.contains(e.target)) {
-        showPillTemporarily();
+    function toggleFullscreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else if (document.exitFullscreen) {
+        document.exitFullscreen();
       }
-    });
-
-    document.getElementById('hoverSensor').addEventListener('touchstart', () => {
-      infoBadge.classList.add('show-fixed');
-      setTimeout(() => infoBadge.classList.remove('show-fixed'), 4000);
-    }, { passive: true });
-
-    zoomPill.addEventListener('click', (e) => e.stopPropagation());
-    zoomPill.addEventListener('dblclick', (e) => { e.stopPropagation(); e.preventDefault(); });
-
-    document.addEventListener('dblclick', (e) => {
-      if (zoomPill.contains(e.target) || infoBadge.contains(e.target)) return;
-      if (window.getSelection) window.getSelection().removeAllRanges();
-      if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
-      else if (document.exitFullscreen) document.exitFullscreen();
-    });
+    }
   </script>
 </body>
 </html>
