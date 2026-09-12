@@ -8,14 +8,43 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; }
+    
+    /* 🌟 四大主題底色定義 */
+    body[data-theme="dark"] {
+      --bg-main: #0a0a0a;
+      --bg-editor: #121212;
+      --text-color: #ffff33;
+      --caret-color: #ffff33;
+    }
+    body[data-theme="green"] {
+      --bg-main: #062b1e;
+      --bg-editor: #093828;
+      --text-color: #ecfdf5;
+      --caret-color: #34d399;
+    }
+    body[data-theme="navy"] {
+      --bg-main: #0b132b;
+      --bg-editor: #1c2541;
+      --text-color: #e0e1dd;
+      --caret-color: #38bdf8;
+    }
+    body[data-theme="light"] {
+      --bg-main: #f1f5f9;
+      --bg-editor: #ffffff;
+      --text-color: #0f172a;
+      --caret-color: #0f172a;
+    }
+
     body {
       margin: 0;
       display: flex;
       flex-direction: column;
       height: 100vh;
-      background: #0a0a0a;
+      background: var(--bg-main);
+      color: var(--text-color);
       font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif;
       overflow: hidden;
+      transition: background 0.2s ease, color 0.2s ease;
     }
     
     .toolbar {
@@ -169,9 +198,10 @@
     .editor-wrapper {
       flex: 1;
       display: flex;
-      background: #121212;
+      background: var(--bg-editor);
       position: relative;
       overflow: hidden;
+      transition: background 0.2s ease;
     }
     
     .editor-container {
@@ -194,9 +224,9 @@
       font-size: 48px;
       line-height: 1.15;
       letter-spacing: 0px;
-      color: #ffff33;
+      color: var(--text-color);
       background: transparent;
-      caret-color: #ffff33;
+      caret-color: var(--caret-color);
       white-space: pre-wrap;
       word-break: break-all;
       text-align: justify;
@@ -246,6 +276,7 @@
       box-sizing: border-box;
     }
 
+    /* 游標與打字氣泡 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -253,11 +284,11 @@
       z-index: 50;
       display: none;
       transform-origin: top left;
-      transition: none !important;
+      transition: left 0.08s ease-out, top 0.08s ease-out;
     }
     .remote-cursor-tag {
       position: absolute;
-      top: -22px;
+      top: -24px;
       left: -2px;
       color: #fff;
       font-size: 11px;
@@ -267,7 +298,24 @@
       white-space: nowrap;
       user-select: none;
       box-shadow: 0 2px 6px rgba(0,0,0,0.6);
-      transition: none !important;
+    }
+    .remote-typing-ghost {
+      position: absolute;
+      left: 6px;
+      top: -2px;
+      background: rgba(56, 189, 248, 0.25);
+      border-bottom: 2px solid #38bdf8;
+      color: #38bdf8;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
+      font-size: 0.8em;
+      white-space: nowrap;
+      border-radius: 3px;
+      padding: 0 4px;
+      animation: pulseGlow 1s infinite alternate;
+    }
+    @keyframes pulseGlow {
+      from { opacity: 0.7; }
+      to { opacity: 1; }
     }
 
     #aiStreamBar {
@@ -468,7 +516,7 @@
     }
   </style>
 </head>
-<body>
+<body data-theme="dark">
 
   <div id="topHoverTrigger"></div>
 
@@ -476,6 +524,17 @@
     <button class="btn btn-ai" id="aiToggleBtn" onclick="toggleAISpeech()">
       🎙️ 語音辨識
     </button>
+
+    <!-- 🌟 最前排：底色切換選單 -->
+    <div class="control-group" style="background: #27272a; padding: 3px 8px; border-radius: 6px; border: 1px solid #38bdf8;">
+      <label for="themeSelect" style="font-weight: bold; color: #38bdf8;">🎨 編輯區底色：</label>
+      <select id="themeSelect" onchange="changeTheme(this.value)" style="font-weight: bold; cursor: pointer; color: #fff;">
+        <option value="dark">⬛ 極致黑底 (黃字)</option>
+        <option value="green">🟩 青綠護眼 (白字)</option>
+        <option value="navy">🟦 深海藍 (灰白字)</option>
+        <option value="light">⬜ 純白底 (黑字)</option>
+      </select>
+    </div>
 
     <div class="mic-control-box">
       <div class="vu-meter-bar" title="麥克風音量">
@@ -617,11 +676,8 @@
     let currentMasterSid = null;
     let isComposing = false;
     let isApplyingRemote = false;
-    let currentDocVersion = 0;
 
-    // 🌟 核心：暫存佇列（當本機正在敲字/選字時，外部更新先暫存不干擾輸入法）
     const pendingRemoteQueue = [];
-
     const remoteCursors = new Map();
     const dmp = new diff_match_patch();
     let shadowText = "";
@@ -629,6 +685,20 @@
 
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
+
+    // 🌟 主題切換與記憶
+    function changeTheme(themeName) {
+      document.body.setAttribute('data-theme', themeName);
+      try {
+        localStorage.setItem('STT_PREFERRED_THEME', themeName);
+      } catch(e) {}
+    }
+    const savedTheme = localStorage.getItem('STT_PREFERRED_THEME') || 'dark';
+    const themeSelectEl = document.getElementById('themeSelect');
+    if (themeSelectEl) {
+      themeSelectEl.value = savedTheme;
+      changeTheme(savedTheme);
+    }
 
     function saveToLocalBlackbox() {
       clearTimeout(localSaveDebounce);
@@ -723,7 +793,6 @@
       editor = newEditor;
 
       bindEditorEvents();
-
       applyLocalStyle();
       editor.focus();
       editor.setSelectionRange(curStart, curEnd);
@@ -786,7 +855,6 @@
       isApplyingRemote = true;
       editor.value = data.text || '';
       shadowText = editor.value;
-      currentDocVersion = data.version || 0;
       updateWordCount();
       autoGrowTextarea();
       updateEndLinePosition();
@@ -799,7 +867,6 @@
         applyLocalStyle();
       }
       isApplyingRemote = false;
-
       checkLocalBlackboxRestore(data.text);
     });
 
@@ -840,13 +907,24 @@
       editor.addEventListener('compositionstart', () => { 
         isComposing = true; 
       });
+
+      editor.addEventListener('compositionupdate', (e) => {
+        socket.emit('cursor_move', {
+          room: roomId,
+          cursor_index: editor.selectionStart,
+          typing_text: e.data || ''
+        });
+      });
       
       editor.addEventListener('compositionend', () => {
         isComposing = false;
-        // 組字完成，立即發布本地變更
+        socket.emit('cursor_move', {
+          room: roomId,
+          cursor_index: editor.selectionStart,
+          typing_text: ''
+        });
         sendRealtimeSync();
         saveToLocalBlackbox();
-        // 將組字期間累積的外部補丁逐一安全消化
         flushPendingQueue();
       });
 
@@ -903,11 +981,10 @@
     socket.on('sync_text', data => {
       if (!data || data.sender_sid === socket.id) return;
 
-      // 正在打注音選字時，封包排隊進 Queue，絕不讓選字框崩掉
       if (isComposing) {
         pendingRemoteQueue.push(data);
         if (data.cursor_index !== undefined) {
-          updateRemoteCursor(data.sender_sid, data.cursor_index);
+          updateRemoteCursor(data.sender_sid, data.cursor_index, '');
         }
         return;
       }
@@ -915,17 +992,15 @@
       applySingleRemoteDelta(data);
     });
 
-    // 🌟 精確差量合併與相對游標錨定演算法
     function applySingleRemoteDelta(data) {
       if (typeof data.text !== 'string') return;
 
       const curStart = editor.selectionStart;
-      const curEnd = editor.selectionEnd;
       const oldText = editor.value;
 
       if (oldText === data.text) {
         if (data.cursor_index !== undefined) {
-          updateRemoteCursor(data.sender_sid, data.cursor_index);
+          updateRemoteCursor(data.sender_sid, data.cursor_index, '');
         }
         return;
       }
@@ -937,7 +1012,6 @@
         try {
           const patches = dmp.patch_fromText(data.patch);
 
-          // 計算對方的補丁在當前游標前方造成的長度差
           let offsetDelta = 0;
           for (let p of patches) {
             if (p.start1 <= curStart) {
@@ -950,7 +1024,6 @@
             editor.value = results[0];
             shadowText = results[0];
 
-            // 游標原地咬住（不隨便跳開）
             const newPos = Math.max(0, Math.min(curStart + offsetDelta, editor.value.length));
             editor.setSelectionRange(newPos, newPos);
             applied = true;
@@ -971,7 +1044,7 @@
       saveToLocalBlackbox();
 
       if (data.cursor_index !== undefined) {
-        updateRemoteCursor(data.sender_sid, data.cursor_index);
+        updateRemoteCursor(data.sender_sid, data.cursor_index, '');
       }
 
       setTimeout(() => { isApplyingRemote = false; }, 10);
@@ -983,13 +1056,13 @@
       const pos = editor.selectionStart;
       if (pos !== lastSentCursor) {
         lastSentCursor = pos;
-        socket.emit('cursor_move', { room: roomId, cursor_index: pos });
+        socket.emit('cursor_move', { room: roomId, cursor_index: pos, typing_text: '' });
       }
     }
 
     socket.on('cursor_update', data => {
       if (!data || !data.sid || data.sid === socket.id) return;
-      updateRemoteCursor(data.sid, data.cursor_index);
+      updateRemoteCursor(data.sid, data.cursor_index, data.typing_text || '');
     });
 
     socket.on('cursor_remove', data => {
@@ -1000,7 +1073,7 @@
       }
     });
 
-    function updateRemoteCursor(sid, cursorIndex) {
+    function updateRemoteCursor(sid, cursorIndex, typingText) {
       let item = remoteCursors.get(sid);
       if (!item) {
         const isTargetMaster = (sid === currentMasterSid);
@@ -1016,13 +1089,26 @@
         tag.style.backgroundColor = color;
         tag.innerText = label;
 
+        const ghost = document.createElement('div');
+        ghost.className = 'remote-typing-ghost';
+        ghost.style.display = 'none';
+
         el.appendChild(tag);
+        el.appendChild(ghost);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag };
+        item = { index: cursorIndex, element: el, tagElement: tag, ghostElement: ghost };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
       }
+
+      if (typingText) {
+        item.ghostElement.innerText = '正在輸入：' + typingText;
+        item.ghostElement.style.display = 'block';
+      } else {
+        item.ghostElement.style.display = 'none';
+      }
+
       renderSingleRemoteCursor(sid);
     }
 
