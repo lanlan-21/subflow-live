@@ -10,9 +10,7 @@ app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 伺服器端房間狀態
 rooms = {}
-
 cleanup_timers = {}
 CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘無人連線自動清理釋放記憶體
 
@@ -40,57 +38,56 @@ def cancel_room_cleanup(room_id):
         timer.cancel()
 
 
-# 🌟 OT 坐標轉換：雙人共筆時字元各自平移保留，絕不疊字吃字
-def transform_op(op, against):
-    t_type = op['type']
-    a_type = against['type']
+# 🌟 Google Docs 級原子轉換：嚴格保證字元自動向後推，絕不重疊覆蓋
+def transform_primitive(op1, op2, priority):
+    if not op1 or not op2:
+        return op1
+    t1, p1 = op1['type'], op1['pos']
+    t2, p2 = op2['type'], op2['pos']
 
-    if t_type == 'insert' and a_type == 'insert':
-        pos = op['pos']
-        if against['pos'] <= pos:
-            return {'type': 'insert', 'pos': pos + len(against['text']), 'text': op['text']}
-        return op
-
-    elif t_type == 'insert' and a_type == 'delete':
-        pos = op['pos']
-        del_pos = against['pos']
-        del_len = against['len']
-        if pos <= del_pos:
-            return op
-        elif pos >= del_pos + del_len:
-            return {'type': 'insert', 'pos': pos - del_len, 'text': op['text']}
+    if t1 == 'insert' and t2 == 'insert':
+        l2 = len(op2['text'])
+        # 若在相同位置同時插入，以優先權判定誰在左邊、誰被推往右邊
+        if p1 < p2 or (p1 == p2 and priority == 'left'):
+            return {'type': 'insert', 'pos': p1, 'text': op1['text']}
         else:
-            return {'type': 'insert', 'pos': del_pos, 'text': op['text']}
+            return {'type': 'insert', 'pos': p1 + l2, 'text': op1['text']}
 
-    elif t_type == 'delete' and a_type == 'insert':
-        pos = op['pos']
-        del_len = op['len']
-        ins_pos = against['pos']
-        ins_len = len(against['text'])
-        if pos >= ins_pos:
-            return {'type': 'delete', 'pos': pos + ins_len, 'len': del_len}
-        elif pos + del_len <= ins_pos:
-            return op
+    elif t1 == 'insert' and t2 == 'delete':
+        l2 = op2['len']
+        if p1 <= p2:
+            return {'type': 'insert', 'pos': p1, 'text': op1['text']}
+        elif p1 >= p2 + l2:
+            return {'type': 'insert', 'pos': p1 - l2, 'text': op1['text']}
         else:
-            return {'type': 'delete', 'pos': pos, 'len': del_len + ins_len}
+            return {'type': 'insert', 'pos': p2, 'text': op1['text']}
 
-    elif t_type == 'delete' and a_type == 'delete':
-        pos1, len1 = op['pos'], op['len']
-        pos2, len2 = against['pos'], against['len']
-        if pos1 + len1 <= pos2:
-            return op
-        elif pos1 >= pos2 + len2:
-            return {'type': 'delete', 'pos': pos1 - len2, 'len': len1}
+    elif t1 == 'delete' and t2 == 'insert':
+        l1 = op1['len']
+        l2 = len(op2['text'])
+        if p1 + l1 <= p2:
+            return {'type': 'delete', 'pos': p1, 'len': l1}
+        elif p1 >= p2:
+            return {'type': 'delete', 'pos': p1 + l2, 'len': l1}
         else:
-            overlap_start = max(pos1, pos2)
-            overlap_end = min(pos1 + len1, pos2 + len2)
-            overlap_len = max(0, overlap_end - overlap_start)
-            new_len = len1 - overlap_len
-            new_pos = min(pos1, pos2)
+            return {'type': 'delete', 'pos': p1, 'len': l1 + l2}
+
+    elif t1 == 'delete' and t2 == 'delete':
+        l1, l2 = op1['len'], op2['len']
+        if p1 + l1 <= p2:
+            return {'type': 'delete', 'pos': p1, 'len': l1}
+        elif p1 >= p2 + l2:
+            return {'type': 'delete', 'pos': p1 - l2, 'len': l1}
+        else:
+            start = max(p1, p2)
+            end = min(p1 + l1, p2 + l2)
+            overlap = end - start
+            new_len = l1 - overlap
             if new_len <= 0:
                 return None
-            return {'type': 'delete', 'pos': new_pos, 'len': new_len}
-    return op
+            return {'type': 'delete', 'pos': min(p1, p2), 'len': new_len}
+
+    return op1
 
 
 def apply_op_to_text(text, op):
@@ -150,7 +147,6 @@ def handle_join(data):
 
     join_room(room_id)
 
-    # 嚴格區分身分
     if is_editor:
         rooms[room_id]["editors"].add(sid)
         if rooms[room_id]["master_sid"] is None:
@@ -193,33 +189,37 @@ def handle_client_operation(data):
         emit('ack_operation', {'version': rdata["version"]}, to=sid)
         return
 
+    # 換行正規化
     ops = []
     for op in raw_ops:
         if op.get('type') == 'insert':
             op['text'] = op['text'].replace('\r\n', '\n').replace('\r', '\n')
         ops.append(op)
 
+    # 針對伺服器自 base_version 以來的所有歷史記錄，進行坐標線性推進
     transformed_ops = []
     for op in ops:
-        current_op = dict(op)
+        curr = dict(op)
         for hist in rdata["history"]:
             if hist['version'] > base_version:
                 if hist['op'].get('type') != 'clear':
-                    current_op = transform_op(current_op, hist['op'])
-                    if current_op is None:
+                    # 後到達伺服器的操作優先權給 right（讓先到者佔據左側，後到者向右推移）
+                    curr = transform_primitive(curr, hist['op'], priority='right')
+                    if curr is None:
                         break
-        if current_op:
-            transformed_ops.append(current_op)
-            rdata["text"] = apply_op_to_text(rdata["text"], current_op)
+        if curr:
+            transformed_ops.append(curr)
+            rdata["text"] = apply_op_to_text(rdata["text"], curr)
             rdata["version"] += 1
-            rdata["history"].append({'version': rdata["version"], 'op': current_op})
+            rdata["history"].append({'version': rdata["version"], 'op': curr})
 
-    if len(rdata["history"]) > 500:
-        rdata["history"] = rdata["history"][-500:]
+    if len(rdata["history"]) > 600:
+        rdata["history"] = rdata["history"][-600:]
 
+    # 先回應發送方 ACK（解鎖發送方的飛行狀態）
     emit('ack_operation', {'version': rdata["version"]}, to=sid)
 
-    # 🌟 同步廣播：既包含差量 ops 給協作夥伴，也帶上全域 text 給觀眾端 100% 絕對投影
+    # 廣播給其他協作人員與大螢幕
     if transformed_ops:
         emit('remote_operation', {
             'version': rdata["version"],
