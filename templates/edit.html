@@ -13,28 +13,28 @@
       --bg-editor: #121212;
       --text-color: #ffff33;
       --caret-color: #ffff33;
-      --composing-color: #fde047;
+      --ghost-color: #38bdf8;
     }
     body[data-theme="green"] {
       --bg-main: #c7edcc;
       --bg-editor: #d2edd2;
       --text-color: #111827;
       --caret-color: #047857;
-      --composing-color: #065f46;
+      --ghost-color: #065f46;
     }
     body[data-theme="navy"] {
       --bg-main: #0b132b;
       --bg-editor: #1c2541;
       --text-color: #e0e1dd;
       --caret-color: #38bdf8;
-      --composing-color: #38bdf8;
+      --ghost-color: #38bdf8;
     }
     body[data-theme="light"] {
       --bg-main: #f1f5f9;
       --bg-editor: #ffffff;
       --text-color: #0f172a;
       --caret-color: #0f172a;
-      --composing-color: #1d4ed8;
+      --ghost-color: #1d4ed8;
     }
 
     body {
@@ -214,39 +214,7 @@
       overflow: hidden !important;
     }
 
-    /* 🌟 Google Docs 級同步展示畫布（底層自然推移） */
-    #editorDisplayLayer {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      padding: 16px 8px 60px 8px;
-      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
-      font-size: 48px;
-      line-height: 1.15;
-      letter-spacing: 0px;
-      color: var(--text-color);
-      white-space: pre-wrap;
-      word-break: break-all;
-      text-align: justify;
-      transform-origin: top left;
-      pointer-events: none;
-      z-index: 5;
-      box-sizing: border-box;
-      overflow: hidden;
-    }
-
-    /* 夥伴正在補字時行內撐開的注音/預選字（自動把後方的字往後推） */
-    .partner-inline-composing {
-      display: inline;
-      color: var(--composing-color);
-      border-bottom: 2px solid var(--composing-color);
-      font-weight: 500;
-      letter-spacing: 0px;
-      margin: 0 1px;
-    }
-
+    /* 🌟 回歸真實原生可見文字：絕對不搞任何透明與偽裝 */
     #editor {
       width: 100%;
       height: 100%;
@@ -258,7 +226,7 @@
       font-size: 48px;
       line-height: 1.15;
       letter-spacing: 0px;
-      color: transparent; /* 文字由展示層負責自然推開渲染 */
+      color: var(--text-color) !important; /* 🌟 確保打字、注音 100% 絕對可見 */
       background: transparent;
       caret-color: var(--caret-color);
       white-space: pre-wrap;
@@ -314,7 +282,7 @@
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
     }
 
-    /* 🌟 夥伴游標線（Google Docs 質感細線） */
+    /* 🌟 夥伴游標（純游標線 + 懸浮標籤） */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -337,6 +305,23 @@
       user-select: none;
       box-shadow: 0 2px 6px rgba(0,0,0,0.6);
       z-index: 60;
+    }
+    /* 🌟 夥伴正在打的注音浮動提示：掛在游標正上方標籤旁，絕不蓋在文字上！ */
+    .remote-typing-pill {
+      position: absolute;
+      top: -24px;
+      left: calc(100% + 4px);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid #38bdf8;
+      color: #38bdf8;
+      font-size: 11px;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      padding: 1px 6px;
+      border-radius: 3px;
+      white-space: nowrap;
+      display: none;
+      pointer-events: none;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.6);
     }
 
     #aiStreamBar {
@@ -625,8 +610,6 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <!-- 🌟 Google Docs 級即時推展展示畫布 -->
-      <div id="editorDisplayLayer"></div>
       <textarea id="editor" placeholder="在此打字... 支援雙人即時推移共筆"></textarea>
       <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="mirrorDiv"></div>
@@ -675,7 +658,6 @@
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     const roomId = "{{ room_id }}";
     let editor = document.getElementById('editor');
-    const editorDisplayLayer = document.getElementById('editorDisplayLayer');
     const editorContainer = document.getElementById('editorContainer');
     const mirrorDiv = document.getElementById('mirrorDiv');
     const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
@@ -698,8 +680,8 @@
     let amIMaster = true;
     let currentMasterSid = null;
     let isComposing = false;
-    let localComposingText = '';
 
+    // 🌟 Google Docs 級狀態機
     let serverVersion = 0;
     let inFlightOp = null;
     let bufferOps = [];
@@ -770,7 +752,6 @@
               base_version: serverVersion,
               ops: [{ type: 'insert', pos: 0, text: clean }]
             });
-            renderDisplayLayer();
             updateWordCount();
             updateEndLinePosition();
           }
@@ -801,7 +782,6 @@
           is_clear: true
         });
 
-        renderDisplayLayer();
         updateWordCount();
         updateEndLinePosition();
         editor.focus();
@@ -820,46 +800,6 @@
       }
     }
     window.onbeforeunload = handleBeforeUnload;
-
-    // 🌟 核心：Google Docs 級即時行內推移渲染器
-    function renderDisplayLayer() {
-      const fullText = editor.value;
-      editorDisplayLayer.innerHTML = '';
-
-      // 蒐集所有協作夥伴正在敲的注音與位置
-      const activePartnerTyping = [];
-      remoteCursors.forEach((item) => {
-        if (item.typingText && item.typingText.trim().length > 0) {
-          activePartnerTyping.push({
-            pos: Math.min(Math.max(item.index, 0), fullText.length),
-            text: item.typingText
-          });
-        }
-      });
-
-      // 依位置排序
-      activePartnerTyping.sort((a, b) => a.pos - b.pos);
-
-      let lastIndex = 0;
-      for (const p of activePartnerTyping) {
-        // 先輸出游標前的正常文字
-        if (p.pos > lastIndex) {
-          editorDisplayLayer.appendChild(document.createTextNode(fullText.substring(lastIndex, p.pos)));
-        }
-        // 🌟 行內撐開空間：插入夥伴正在敲的注音（字元自動向後推移！）
-        const inlineSpan = document.createElement('span');
-        inlineSpan.className = 'partner-inline-composing';
-        inlineSpan.textContent = p.text;
-        editorDisplayLayer.appendChild(inlineSpan);
-
-        lastIndex = p.pos;
-      }
-
-      // 輸出剩餘文字
-      if (lastIndex < fullText.length) {
-        editorDisplayLayer.appendChild(document.createTextNode(fullText.substring(lastIndex)));
-      }
-    }
 
     function updateEndLinePosition() {
       if (!editor) return;
@@ -904,7 +844,6 @@
       serverVersion = data.version || 0;
       inFlightOp = null;
       bufferOps = [];
-      renderDisplayLayer();
       updateWordCount();
       updateEndLinePosition();
 
@@ -983,8 +922,6 @@
     function handleLocalTyping() {
       const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (editor.value !== currentText) editor.value = currentText;
-
-      renderDisplayLayer(); // 即時重繪展示層
 
       if (currentText === lastKnownText) return;
 
@@ -1073,7 +1010,6 @@
         serverVersion = data.version;
         inFlightOp = null;
         bufferOps = [];
-        renderDisplayLayer();
         updateWordCount();
         updateEndLinePosition();
         return;
@@ -1107,7 +1043,6 @@
         }
       }
 
-      renderDisplayLayer();
       updateWordCount();
       updateEndLinePosition();
       saveToLocalBlackbox();
@@ -1137,12 +1072,11 @@
       editor.scrollTop = savedScrollTop;
     }
 
-    // 🌟 毫秒級行內推展廣播：敲鍵即時發送注音/字詞
     let lastSentComposing = '';
     function broadcastLiveTyping(str) {
       if (str !== lastSentComposing) {
         lastSentComposing = str;
-        // 1. 廣播給夥伴游標位置與正在敲的注音內容
+        // 1. 廣播給夥伴游標位置與注音文字
         socket.emit('cursor_move', {
           room: roomId,
           cursor_index: editor.selectionStart,
@@ -1161,29 +1095,24 @@
     function bindEditorEvents() {
       editor.addEventListener('compositionstart', (e) => { 
         isComposing = true; 
-        localComposingText = e.data || '';
-        broadcastLiveTyping(localComposingText);
+        broadcastLiveTyping(e.data || '...');
       });
 
       editor.addEventListener('compositionupdate', (e) => {
-        localComposingText = e.data || '';
-        broadcastLiveTyping(localComposingText);
+        broadcastLiveTyping(e.data || '');
       });
 
       editor.addEventListener('input', (e) => {
         if (e.isComposing || isComposing) {
-          localComposingText = e.data || localComposingText;
-          broadcastLiveTyping(localComposingText);
+          if (e.data) broadcastLiveTyping(e.data);
           return;
         }
-        localComposingText = '';
         broadcastLiveTyping('');
         handleLocalTyping();
       });
       
       editor.addEventListener('compositionend', () => {
         isComposing = false;
-        localComposingText = '';
         broadcastLiveTyping('');
         handleLocalTyping();
       });
@@ -1196,7 +1125,6 @@
       });
 
       editor.addEventListener('scroll', () => {
-        editorDisplayLayer.scrollTop = editor.scrollTop;
         redrawAllRemoteCursors();
         updateEndLinePosition();
       });
@@ -1213,11 +1141,9 @@
       }
     }
 
-    // 🌟 收到夥伴游標與敲注音狀態：立刻在行內撐開推移！
     socket.on('cursor_update', data => {
       if (!data || !data.sid || data.sid === socket.id) return;
       updateRemoteCursor(data.sid, data.cursor_index, data.typing_text || '');
-      renderDisplayLayer(); // 行內即刻撐開推移！
     });
 
     socket.on('cursor_remove', data => {
@@ -1225,10 +1151,10 @@
         const item = remoteCursors.get(data.sid);
         if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
         remoteCursors.delete(data.sid);
-        renderDisplayLayer();
       }
     });
 
+    // 🌟 夥伴游標線 + 正在敲打的注音浮動在標籤旁（絕不遮擋任何本體字！）
     function updateRemoteCursor(sid, cursorIndex, typingText) {
       let item = remoteCursors.get(sid);
       if (!item) {
@@ -1245,9 +1171,13 @@
         tag.style.backgroundColor = color;
         tag.innerText = label;
 
+        const typingPill = document.createElement('div');
+        typingPill.className = 'remote-typing-pill';
+
         el.appendChild(tag);
+        el.appendChild(typingPill);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag, typingText: '' };
+        item = { index: cursorIndex, element: el, tagElement: tag, pillElement: typingPill, typingText: '' };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
@@ -1330,6 +1260,15 @@
         el.style.zoom = scaleVal;
         el.style.display = 'block';
       }
+
+      // 🌟 若夥伴正在敲注音或組字，在游標上方標籤旁邊掛載一個小提示膠囊（絕不遮擋正文字）
+      if (item.typingText && item.typingText.trim().length > 0) {
+        item.pillElement.innerText = `正在輸入: ${item.typingText}`;
+        item.pillElement.style.display = 'block';
+      } else {
+        item.pillElement.innerText = '';
+        item.pillElement.style.display = 'none';
+      }
     }
 
     function redrawAllRemoteCursors() {
@@ -1347,22 +1286,13 @@
       const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
-      const fs = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      editor.style.fontSize = fs;
-      editorDisplayLayer.style.fontSize = fs;
-
-      const padStr = `${py} ${px} 60px ${px}`;
-      editor.style.padding = padStr;
-      editorDisplayLayer.style.padding = padStr;
-
+      editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
+      editor.style.padding = `${py} ${px} 60px ${px}`;
       if ('zoom' in editor.style) {
         editor.style.zoom = scaleVal;
-        editorDisplayLayer.style.zoom = scaleVal;
       } else {
         editor.style.transform = `scale(${scaleVal})`;
         editor.style.width = `${100 / scaleVal}%`;
-        editorDisplayLayer.style.transform = `scale(${scaleVal})`;
-        editorDisplayLayer.style.width = `${100 / scaleVal}%`;
       }
       redrawAllRemoteCursors();
       updateEndLinePosition();
@@ -1635,7 +1565,6 @@
     }
 
     applyLocalStyle();
-    renderDisplayLayer();
     updateWordCount();
     updateEndLinePosition();
   </script>
