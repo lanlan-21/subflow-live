@@ -210,7 +210,6 @@
       overflow: hidden !important;
     }
 
-    /* 🌟 原生編輯器：絕對鎖定文字排版，禁止任何額外空間擠壓 */
     #editor {
       width: 100%;
       height: 100%;
@@ -264,6 +263,7 @@
       letter-spacing: 1px;
     }
 
+    /* 🌟 坐標鏡像盒：樣式必須與 #editor 達到 100% 絕對重合 */
     #mirrorDiv {
       position: absolute;
       top: 0;
@@ -590,7 +590,7 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... 支援雙人即時推移共筆"></textarea>
+      <textarea id="editor" placeholder="在此打字... 支援雙人穩定同步共筆"></textarea>
       <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
@@ -810,8 +810,11 @@
       mirrorDiv.innerHTML = '';
       mirrorDiv.appendChild(document.createTextNode(editor.value || ''));
       
+      // 🌟 零寬度精確探針（絕不溢出邊界）
       const bottomProbe = document.createElement('span');
-      bottomProbe.textContent = ' ';
+      bottomProbe.style.display = 'inline-block';
+      bottomProbe.style.width = '0px';
+      bottomProbe.textContent = '';
       mirrorDiv.appendChild(bottomProbe);
 
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
@@ -1039,7 +1042,6 @@
       saveToLocalBlackbox();
     });
 
-    // 🌟 原生微創注入：游標鎖定，絕不重算整篇文字排版，徹底杜絕跳行
     function applyOpToDOM(op) {
       let curStart = editor.selectionStart;
       let curEnd = editor.selectionEnd;
@@ -1155,7 +1157,7 @@
       });
     }
 
-    // 🌟 純文字靜態克隆測量：絕不插入破壞排版的 probe 節點，100% 杜絕折行誤判與跳行
+    // 🌟 徹底杜絕跳行的關鍵：使用「無字元 0 寬度 inline-block」錨點，保證永遠落在同一行！
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || !editor) return;
@@ -1191,12 +1193,16 @@
         const preText = fullVal.substring(0, targetIndex);
         mirrorDiv.appendChild(document.createTextNode(preText));
         
+        // 🌟 0 寬度純標記，絕不佔據一絲一毫字符空間，不會被擠到下一行！
         const anchor = document.createElement('span');
-        anchor.textContent = '|';
+        anchor.style.display = 'inline-block';
+        anchor.style.width = '0px';
+        anchor.style.height = fontHeight + 'px';
+        anchor.style.verticalAlign = 'bottom';
         mirrorDiv.appendChild(anchor);
 
-        const targetX = anchor.offsetLeft;
-        const targetY = anchor.offsetTop;
+        let targetX = anchor.offsetLeft;
+        let targetY = anchor.offsetTop;
 
         el.style.left = targetX + 'px';
         el.style.top = (targetY * scaleVal - editor.scrollTop) + 'px';
