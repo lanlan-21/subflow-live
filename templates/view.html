@@ -21,13 +21,13 @@
       scroll-behavior: smooth;
     }
 
-    /* 🌟 精簡版觀眾控制列：頂部浮現，4 秒自動淡化為低干擾 */
+    /* 頂部極簡控制列（4 秒無動作自動半透明） */
     .viewer-toolbar {
       position: fixed;
       top: 0;
       left: 0;
       width: 100%;
-      background: rgba(15, 23, 42, 0.9);
+      background: rgba(15, 23, 42, 0.92);
       border-bottom: 1px solid #334155;
       padding: 8px 16px;
       display: flex;
@@ -55,7 +55,7 @@
       gap: 4px;
     }
     .size-input {
-      width: 54px;
+      width: 56px;
       text-align: center;
       padding: 4px 6px;
       border: 1px solid #555;
@@ -78,7 +78,7 @@
     .btn-step:hover { background: #475569; }
 
     .btn {
-      padding: 5px 12px;
+      padding: 5px 14px;
       border: 1px solid #475569;
       background: #1e293b;
       color: #fff;
@@ -88,11 +88,32 @@
       font-weight: 600;
       display: inline-flex;
       align-items: center;
-      gap: 4px;
-      transition: background 0.2s;
+      gap: 5px;
+      transition: all 0.2s;
     }
     .btn:hover { background: #334155; }
     
+    /* 模式按鈕狀態外觀 */
+    .btn-following {
+      background: #15803d;
+      border-color: #22c55e;
+      color: #f0fdf4;
+      cursor: default;
+    }
+    .btn-free {
+      background: #b45309;
+      border-color: #f59e0b;
+      color: #fffbeb;
+      animation: pulseAttention 2s infinite alternate;
+    }
+    .btn-free:hover {
+      background: #d97706;
+    }
+    @keyframes pulseAttention {
+      from { box-shadow: 0 0 0 rgba(245, 158, 11, 0); }
+      to { box-shadow: 0 0 10px rgba(245, 158, 11, 0.4); }
+    }
+
     .status-pill {
       margin-left: auto;
       display: inline-flex;
@@ -133,24 +154,18 @@
 </head>
 <body>
 
-  <!-- 🌟 觀眾端精簡控制列 -->
   <div class="viewer-toolbar" id="viewerToolbar">
-    <!-- 1. 觀看比例 -->
+    <!-- 1. 觀看比例微調（獨立調整，絕不中斷自動捲動） -->
     <div class="control-group">
       <label for="scaleInput">觀看比例：</label>
-      <input type="number" id="scaleInput" class="size-input" value="100" min="40" max="250" step="5" onchange="onCustomScaleChange()">%
+      <input type="number" id="scaleInput" class="size-input" value="100" min="40" max="250" step="5" onchange="applyCurrentScale()">%
       <button class="btn-step" onclick="stepScale(5)">+5%</button>
       <button class="btn-step" onclick="stepScale(-5)">-5%</button>
     </div>
 
-    <!-- 2. 自動捲動開關 -->
-    <button class="btn" id="scrollToggleBtn" onclick="toggleAutoScroll()">
-      ⬇️ 自動捲動：開
-    </button>
-
-    <!-- 3. 跟隨主投影開關 -->
-    <button class="btn" id="followMasterBtn" onclick="toggleFollowMaster()">
-      🔗 跟隨主投影：開
+    <!-- 2. 核心模式按鈕：只有在往上滑時才切換，點擊立刻跳回最新進度 -->
+    <button class="btn btn-following" id="followBtn" onclick="onClickFollowButton()">
+      🔗 跟隨主投影中（自動跳底）
     </button>
 
     <button class="btn" onclick="toggleFullscreen()">
@@ -170,16 +185,15 @@
     const roomId = "{{ room_id }}";
     const displayArea = document.getElementById('displayArea');
     const scaleInput = document.getElementById('scaleInput');
-    const scrollToggleBtn = document.getElementById('scrollToggleBtn');
-    const followMasterBtn = document.getElementById('followMasterBtn');
+    const followBtn = document.getElementById('followBtn');
     const viewerToolbar = document.getElementById('viewerToolbar');
 
-    let autoScrollEnabled = true;
-    let followMasterEnabled = true; // 預設跟隨主控端縮放與排版
-    let latestMasterSettings = null;
+    let isAutoScrolling = true;    // 是否保持自動捲動至最新字幕
+    let hasUserCustomScale = false; // 是否自行手動微調過比例
+    let masterSettings = null;     // 主控端最新的設定快照
     let toolbarTimer = null;
 
-    // 工具列閒置淡化
+    // 工具列 4 秒無動作自動淡化
     function resetToolbarDim() {
       viewerToolbar.classList.remove('dimmed');
       clearTimeout(toolbarTimer);
@@ -190,106 +204,65 @@
     window.addEventListener('mousemove', resetToolbarDim);
     resetToolbarDim();
 
-    // 🌟 1. 觀看比例調整
+    // 🌟 1. 觀眾調整比例：純粹縮放畫面，絕對不干擾自動捲動！
     function stepScale(delta) {
-      let val = (parseInt(scaleInput.value, 10) || 100) + delta;
-      scaleInput.value = Math.min(Math.max(val, 40), 250);
-      onCustomScaleChange();
+      let currentVal = parseInt(scaleInput.value, 10) || 100;
+      scaleInput.value = Math.min(Math.max(currentVal + delta, 40), 250);
+      applyCurrentScale();
     }
 
-    function onCustomScaleChange() {
-      // 只要觀眾手動微調比例，自動將「跟隨主投影」切為關閉
-      if (followMasterEnabled) {
-        followMasterEnabled = false;
-        updateFollowMasterUI();
-      }
-      applyScaleOnly();
-    }
-
-    function applyScaleOnly() {
-      const scale = (parseInt(scaleInput.value, 10) || 100) / 100;
+    function applyCurrentScale() {
+      hasUserCustomScale = true; // 標記為觀眾自訂比例
+      const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       if ('zoom' in displayArea.style) {
-        displayArea.style.zoom = scale;
+        displayArea.style.zoom = scaleVal;
       } else {
-        displayArea.style.transform = `scale(${scale})`;
-        displayArea.style.width = `${100 / scale}%`;
+        displayArea.style.transform = `scale(${scaleVal})`;
+        displayArea.style.width = `${100 / scaleVal}%`;
       }
-      scrollToBottom();
+      // 縮放完成後，若原本就在跟隨狀態，平滑對齊底部
+      if (isAutoScrolling) {
+        scrollToBottom();
+      }
     }
 
-    // 🌟 2. 自動捲動開關
-    function toggleAutoScroll() {
-      autoScrollEnabled = !autoScrollEnabled;
-      updateAutoScrollUI();
-      if (autoScrollEnabled) scrollToBottom();
+    // 🌟 2. 點擊按鈕：一鍵切回自動捲動至最新字詞
+    function onClickFollowButton() {
+      if (!isAutoScrolling) {
+        setAutoScrollingMode(true);
+        scrollToBottom();
+      }
     }
 
-    function updateAutoScrollUI() {
-      scrollToggleBtn.innerText = autoScrollEnabled ? "⬇️ 自動捲動：開" : "⏸️ 自動捲動：關";
-      scrollToggleBtn.style.color = autoScrollEnabled ? "#4ade80" : "#f87171";
+    function setAutoScrollingMode(active) {
+      isAutoScrolling = active;
+      if (isAutoScrolling) {
+        followBtn.className = "btn btn-following";
+        followBtn.innerText = "🔗 跟隨主投影中（自動跳底）";
+      } else {
+        followBtn.className = "btn btn-free";
+        followBtn.innerText = "📜 自由瀏覽中（點此切回跟隨）";
+      }
     }
 
     function scrollToBottom() {
-      if (!autoScrollEnabled) return;
+      if (!isAutoScrolling) return;
       window.scrollTo({
         top: document.documentElement.scrollHeight,
         behavior: 'smooth'
       });
     }
 
-    // 若觀眾往上滾輪查閱歷史，自動暫停跳底；滾回底部自動恢復
+    // 🌟 3. 只有「主動往上滑動看歷史」才會暫停跳底；滑到底部自動回歸跟隨
     window.addEventListener('scroll', () => {
       const scrollPos = window.innerHeight + window.scrollY;
       const threshold = document.documentElement.scrollHeight - 80;
-      if (scrollPos < threshold && autoScrollEnabled) {
-        autoScrollEnabled = false;
-        updateAutoScrollUI();
-      } else if (scrollPos >= threshold && !autoScrollEnabled) {
-        autoScrollEnabled = true;
-        updateAutoScrollUI();
+      if (scrollPos < threshold && isAutoScrolling) {
+        setAutoScrollingMode(false);
+      } else if (scrollPos >= threshold && !isAutoScrolling) {
+        setAutoScrollingMode(true);
       }
     });
-
-    // 🌟 3. 跟隨主投影開關
-    function toggleFollowMaster() {
-      followMasterEnabled = !followMasterEnabled;
-      updateFollowMasterUI();
-
-      // 若重新開啟跟隨，立刻套用主投影最新傳來的設定
-      if (followMasterEnabled && latestMasterSettings) {
-        applyMasterSettings(latestMasterSettings);
-      }
-    }
-
-    function updateFollowMasterUI() {
-      followMasterBtn.innerText = followMasterEnabled ? "🔗 跟隨主投影：開" : "🔒 獨立自訂：開";
-      followMasterBtn.style.color = followMasterEnabled ? "#38bdf8" : "#fde047";
-    }
-
-    function applyMasterSettings(settings) {
-      if (!settings) return;
-      latestMasterSettings = settings;
-      if (!followMasterEnabled) return; // 若觀眾選擇不跟隨，跳過
-
-      if (settings.size) {
-        displayArea.style.fontSize = settings.size + 'px';
-      }
-      if (settings.scale !== undefined) {
-        scaleInput.value = settings.scale;
-        const scaleVal = settings.scale / 100;
-        if ('zoom' in displayArea.style) {
-          displayArea.style.zoom = scaleVal;
-        } else {
-          displayArea.style.transform = `scale(${scaleVal})`;
-          displayArea.style.width = `${100 / scaleVal}%`;
-        }
-      }
-      const px = (settings.pad_x !== undefined ? settings.pad_x : 16) + 'px';
-      const py = (settings.pad_y !== undefined ? settings.pad_y : 16) + 'px';
-      displayArea.style.padding = `${py} ${px} 140px ${px}`;
-
-      scrollToBottom();
-    }
 
     function toggleFullscreen() {
       if (!document.fullscreenElement) {
@@ -302,7 +275,7 @@
       document.body.classList.toggle('is-fullscreen', !!document.fullscreenElement);
     });
 
-    // 連線進入（純唯讀身份）
+    // 連線（純唯讀觀眾）
     socket.on('connect', () => {
       socket.emit('join', { room: roomId, is_editor: false });
     });
@@ -311,12 +284,13 @@
       if (!data) return;
       displayArea.innerText = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (data.settings) {
-        applyMasterSettings(data.settings);
+        masterSettings = data.settings;
+        applyMasterSettings(masterSettings);
       }
       setTimeout(scrollToBottom, 60);
     });
 
-    // 接收 OT 增量排隊動作
+    // 接收 OT 最新文字
     socket.on('remote_operation', data => {
       if (!data) return;
 
@@ -341,17 +315,45 @@
       }
 
       displayArea.innerText = text;
-      scrollToBottom();
+      // 只要沒有往上滑看舊字，新字一到立刻平滑跟隨滾動
+      if (isAutoScrolling) {
+        scrollToBottom();
+      }
     });
 
     // 主控端修改設定時同步廣播
     socket.on('sync_settings', settings => {
+      masterSettings = settings;
       applyMasterSettings(settings);
     });
 
-    // 初始化狀態外觀
-    updateAutoScrollUI();
-    updateFollowMasterUI();
+    function applyMasterSettings(settings) {
+      if (!settings) return;
+
+      if (settings.size) {
+        displayArea.style.fontSize = settings.size + 'px';
+      }
+
+      // 若觀眾尚未手動微調過，則完全依據主控端縮放比例
+      if (!hasUserCustomScale && settings.scale !== undefined) {
+        scaleInput.value = settings.scale;
+        const scaleVal = settings.scale / 100;
+        if ('zoom' in displayArea.style) {
+          displayArea.style.zoom = scaleVal;
+        } else {
+          displayArea.style.transform = `scale(${scaleVal})`;
+          displayArea.style.width = `${100 / scaleVal}%`;
+        }
+      }
+
+      const px = (settings.pad_x !== undefined ? settings.pad_x : 16) + 'px';
+      const py = (settings.pad_y !== undefined ? settings.pad_y : 16) + 'px';
+      displayArea.style.padding = `${py} ${px} 140px ${px}`;
+
+      if (isAutoScrolling) {
+        scrollToBottom();
+      }
+    }
   </script>
 </body>
 </html>
