@@ -201,7 +201,7 @@
       transition: width 0.04s ease-out;
     }
 
-    /* 🌟 核心防跳行架構：統一由 editor 捲動，外層容器嚴格鎖死 overflow: hidden */
+    /* 🌟 單一滾動軸統一化：徹底杜絕 5 行跳躍 */
     .editor-wrapper {
       flex: 1;
       display: flex;
@@ -216,7 +216,7 @@
       flex: 1;
       width: 100%;
       height: 100%;
-      overflow: hidden !important; /* 🌟 徹底廢除外層滾動軸 */
+      overflow: hidden !important; /* 外層嚴格禁止滾動 */
     }
 
     #editor {
@@ -225,7 +225,7 @@
       border: none;
       outline: none;
       resize: none;
-      padding: 16px 8px 60px 8px; /* 正常內距，拿掉 350px 誘發滾動跳行的問題 */
+      padding: 16px 8px 60px 8px;
       font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
       font-size: 48px;
       line-height: 1.15;
@@ -241,9 +241,9 @@
       position: relative;
       z-index: 10;
       box-sizing: border-box;
-      overflow-y: auto !important; /* 🌟 唯一合法的原生滾動權限 */
+      overflow-y: auto !important; /* 唯一合法的原生滾動 */
       overflow-x: hidden !important;
-      overflow-anchor: none !important;
+      overflow-anchor: none !important; /* 拔除滾動錨定 */
     }
 
     #endLineMarker {
@@ -933,7 +933,7 @@
       docVersion = data.version;
     });
 
-    // 🌟 核心防跳行注入：0 毫秒滾動鎖定，絕對不跳 5 行
+    // 🌟 接收遠端原子動作：絕對滾動鎖定，徹底杜絕暴跳 5 行
     socket.on('remote_operation', data => {
       if (!data || data.sender_sid === socket.id) return;
 
@@ -983,7 +983,7 @@
       committedText = editor.value;
       editor.setSelectionRange(curStart, curEnd);
 
-      // 強行固定滾動軸高度，絕對不跳 5 行
+      // 強行固定唯一滾動軸高度，絕對不跳 5 行
       editor.scrollTop = savedScrollTop;
 
       updateWordCount();
