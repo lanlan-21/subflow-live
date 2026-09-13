@@ -279,6 +279,7 @@
       letter-spacing: 0px;
     }
 
+    /* 🌟 夥伴游標線 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -301,6 +302,21 @@
       user-select: none;
       box-shadow: 0 2px 6px rgba(0,0,0,0.6);
       z-index: 60;
+    }
+    /* 🌟 夥伴正在打的注音：直接在該行游標右側向後推開顯示 */
+    .remote-inline-typing {
+      position: absolute;
+      left: 4px;
+      top: 0;
+      color: #38bdf8;
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
+      font-size: inherit;
+      line-height: 1.25;
+      letter-spacing: 0px;
+      white-space: nowrap;
+      pointer-events: none;
+      border-bottom: 2px dashed #38bdf8;
+      display: none;
     }
 
     #aiStreamBar {
@@ -634,7 +650,6 @@
   </div>
 
   <script>
-    // 🌟 1. 本機唯一永久身分證（重連 1000 次也是同一個，絕不再無中生有多個游標！）
     let myClientId = sessionStorage.getItem('STT_CLIENT_ID');
     if (!myClientId) {
       myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
@@ -672,7 +687,6 @@
     let bufferOps = [];
     let committedText = "";
 
-    // 🌟 remoteCursors: Map<clientId, { index, element, tagElement, timer }>
     const remoteCursors = new Map();
     const audienceUrl = window.location.origin + '/view/' + roomId;
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
@@ -847,7 +861,6 @@
 
     socket.on('connect', () => { 
       clearAllRemoteCursors();
-      // 🌟 送出永久唯一的 myClientId
       socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); 
     });
 
@@ -877,7 +890,6 @@
       checkLocalBlackboxRestore(data.text);
     });
 
-    // 🌟 在線人員權威同步：非名單上的游標瞬間清洗
     socket.on('role_status_update', data => {
       const totalEditors = data.total_editors || 1;
       const totalViewers = data.total_viewers || 0;
@@ -887,7 +899,6 @@
       currentMasterClientId = data.master_client_id;
       amIMaster = (currentMasterClientId === myClientId);
 
-      // 嚴格比對 client_id：只要不在名單或是我自己的舊游標，秒殺！
       remoteCursors.forEach((item, cid) => {
         if (!activeEditors.includes(cid) || cid === myClientId) {
           if (item.element && item.element.parentNode) {
@@ -1104,20 +1115,47 @@
       editor.scrollTop = savedScrollTop;
     }
 
+    // 🌟 核心即時注音串流廣播：敲注音未確認前，0 毫秒廣播給夥伴
+    let lastSentComposingText = '';
+    function broadcastLiveTyping(str) {
+      if (str !== lastSentComposingText) {
+        lastSentComposingText = str;
+        socket.emit('live_composing_stream', {
+          room: roomId,
+          client_id: myClientId,
+          cursor_index: editor.selectionStart,
+          composing_text: str
+        });
+      }
+    }
+
     function bindEditorEvents() {
-      editor.addEventListener('compositionstart', () => { 
+      // 1. 敲下第一個注音（開始組字）
+      editor.addEventListener('compositionstart', (e) => { 
         isComposing = true; 
+        broadcastLiveTyping(e.data || '...');
+      });
+
+      // 2. 敲注音跳動（例如按 ㄍ、ㄠ、ˇ）
+      editor.addEventListener('compositionupdate', (e) => {
+        broadcastLiveTyping(e.data || '');
       });
 
       editor.addEventListener('input', (e) => {
-        if (e.isComposing || isComposing) return;
+        if (e.isComposing || isComposing) {
+          if (e.data) broadcastLiveTyping(e.data);
+          return;
+        }
+        broadcastLiveTyping('');
         handleLocalTyping();
         broadcastCursorOnly();
       });
       
+      // 3. 按 Enter 定稿
       editor.addEventListener('compositionend', () => {
         isComposing = false;
-        handleLocalTyping();
+        broadcastLiveTyping(''); // 清除未定稿行內注音
+        handleLocalTyping();     // 固化為正式定稿文字
         broadcastCursorOnly();
       });
 
@@ -1139,15 +1177,19 @@
       const pos = editor.selectionStart;
       if (pos !== lastSentCursor) {
         lastSentCursor = pos;
-        // 🌟 攜帶唯一穩定的 myClientId
         socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: pos });
       }
     }
 
-    // 🌟 收到游標移動：以 client_id 唯一更新，一人永遠只有一根游標！
+    // 🌟 接收夥伴正在敲打的注音串流：在游標所在行向右即時推開顯示！
+    socket.on('remote_composing_stream', data => {
+      if (!data || !data.client_id || data.client_id === myClientId) return;
+      updateRemoteCursor(data.client_id, data.cursor_index, data.composing_text || '');
+    });
+
     socket.on('cursor_update', data => {
       if (!data || !data.client_id || data.client_id === myClientId) return;
-      updateRemoteCursor(data.client_id, data.cursor_index);
+      updateRemoteCursor(data.client_id, data.cursor_index, '');
     });
 
     socket.on('cursor_remove', data => {
@@ -1159,8 +1201,7 @@
       }
     });
 
-    function updateRemoteCursor(cid, cursorIndex) {
-      // 🌟 雙人防線：全場只允許該 client_id 存在一個元件，清理其他重複
+    function updateRemoteCursor(cid, cursorIndex, composingText) {
       remoteCursors.forEach((item, oldCid) => {
         if (oldCid !== cid) {
           if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
@@ -1183,15 +1224,27 @@
         tag.style.backgroundColor = color;
         tag.innerText = label;
 
+        const inlineTyping = document.createElement('span');
+        inlineTyping.className = 'remote-inline-typing';
+
         el.appendChild(tag);
+        el.appendChild(inlineTyping);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag, fadeTimer: null };
+        item = { index: cursorIndex, element: el, tagElement: tag, inlineTyping: inlineTyping, fadeTimer: null };
         remoteCursors.set(cid, item);
       } else {
         item.index = cursorIndex;
       }
 
-      // 游標活動時清晰可見，靜止 5 秒後淡化
+      // 🌟 夥伴敲注音時，在游標右側即時撐開
+      if (composingText && composingText.trim().length > 0) {
+        item.inlineTyping.innerText = composingText;
+        item.inlineTyping.style.display = 'inline-block';
+      } else {
+        item.inlineTyping.innerText = '';
+        item.inlineTyping.style.display = 'none';
+      }
+
       item.element.style.opacity = '1';
       clearTimeout(item.fadeTimer);
       item.fadeTimer = setTimeout(() => {
@@ -1213,6 +1266,7 @@
       });
     }
 
+    // 🌟 嚴格保證游標與推開字元釘在當前行，絕對不跳到下一行
     function renderSingleRemoteCursor(cid) {
       const item = remoteCursors.get(cid);
       if (!item || !editor) return;
@@ -1319,7 +1373,6 @@
 
     socket.on('sync_settings', data => {
       if (data && !amIMaster) {
-        // 協作員端保持個人獨立自訂視圖
       }
     });
     
