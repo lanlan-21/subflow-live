@@ -277,6 +277,7 @@
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
     }
 
+    /* 🌟 Google Docs 級光標線 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -661,27 +662,12 @@
     let serverVersion = 0;
     let inFlightOp = null;
     let bufferOps = [];
-    let lastKnownText = "";
+    let committedText = "";
 
-    const remoteComposingMap = new Map();
     const remoteCursors = new Map();
-
     const audienceUrl = window.location.origin + '/view/' + roomId;
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
-
-    // 🌟 效能優化 1：使用 requestAnimationFrame 防抖重排
-    let isRenderScheduled = false;
-    function scheduleUIRender() {
-      if (!isRenderScheduled) {
-        isRenderScheduled = true;
-        requestAnimationFrame(() => {
-          redrawAllRemoteCursors();
-          updateEndLinePosition();
-          isRenderScheduled = false;
-        });
-      }
-    }
 
     function changeTheme(themeName) {
       document.body.setAttribute('data-theme', themeName);
@@ -708,7 +694,7 @@
       clearTimeout(localSaveDebounce);
       localSaveDebounce = setTimeout(() => {
         try {
-          const raw = lastKnownText;
+          const raw = editor.value;
           if (raw && raw.trim().length > 0) {
             localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify({
               text: raw,
@@ -735,8 +721,8 @@
           
           if (restoreConfirm) {
             const clean = savedData.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            lastKnownText = clean;
             editor.value = clean;
+            committedText = clean;
             editor.setSelectionRange(clean.length, clean.length);
             socket.emit('client_operation', {
               room: roomId,
@@ -744,7 +730,7 @@
               ops: [{ type: 'insert', pos: 0, text: clean }]
             });
             updateWordCount();
-            scheduleUIRender();
+            updateEndLinePosition();
           }
         }
       } catch(e) {}
@@ -761,10 +747,9 @@
       
       if (confirm(warningMsg)) {
         editor.value = '';
-        lastKnownText = '';
+        committedText = '';
         inFlightOp = null;
         bufferOps = [];
-        remoteComposingMap.clear();
         editor.setSelectionRange(0, 0);
         try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {}
         
@@ -775,13 +760,13 @@
         });
 
         updateWordCount();
-        scheduleUIRender();
+        updateEndLinePosition();
         editor.focus();
       }
     }
 
     function handleBeforeUnload(e) {
-      if (lastKnownText && lastKnownText.trim().length > 0) {
+      if (editor && editor.value && editor.value.trim().length > 0) {
         e = e || window.event;
         const msg = "您輸入的逐字稿尚未匯出，確定要離開嗎？";
         if (e) {
@@ -831,13 +816,13 @@
     socket.on('init_document', data => {
       if (!data) return;
       const clean = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      lastKnownText = clean;
       editor.value = clean;
+      committedText = clean;
       serverVersion = data.version || 0;
       inFlightOp = null;
       bufferOps = [];
       updateWordCount();
-      scheduleUIRender();
+      updateEndLinePosition();
 
       if (data.settings && amIMaster) {
         if (data.settings.theme) {
@@ -911,14 +896,15 @@
       return ops;
     }
 
+    // 🌟 本地打字觸發：只在文字真正有異動時才送出
     function handleLocalTyping() {
       const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (editor.value !== currentText) editor.value = currentText;
 
-      if (currentText === lastKnownText) return;
+      if (currentText === committedText) return;
 
-      const ops = getAtomicOps(lastKnownText, currentText);
-      lastKnownText = currentText;
+      const ops = getAtomicOps(committedText, currentText);
+      committedText = currentText;
 
       if (ops.length === 0) return;
 
@@ -936,7 +922,7 @@
       }
 
       updateWordCount();
-      scheduleUIRender();
+      updateEndLinePosition();
       saveToLocalBlackbox();
     }
 
@@ -993,23 +979,19 @@
       return op1;
     }
 
+    // 🌟 接收搭檔的遠端動作：使用微創 setRangeText，絕不重置排版，絕不往下跳行！
     socket.on('remote_operation', data => {
       if (!data || data.sender_sid === socket.id) return;
 
       if (data.is_clear) {
         editor.value = '';
-        lastKnownText = '';
+        committedText = '';
         serverVersion = data.version;
         inFlightOp = null;
         bufferOps = [];
-        remoteComposingMap.clear();
         updateWordCount();
-        scheduleUIRender();
+        updateEndLinePosition();
         return;
-      }
-
-      if (data.sender_sid) {
-        remoteComposingMap.delete(data.sender_sid);
       }
 
       serverVersion = data.version;
@@ -1041,10 +1023,11 @@
       }
 
       updateWordCount();
-      scheduleUIRender();
+      updateEndLinePosition();
       saveToLocalBlackbox();
     });
 
+    // 🌟 微創注入：保持原生滾動軸與行數絕對穩定
     function applyOpToDOM(op) {
       let curStart = editor.selectionStart;
       let curEnd = editor.selectionEnd;
@@ -1052,104 +1035,35 @@
 
       if (op.type === 'insert') {
         const insertText = op.text;
-        const p = Math.min(op.pos, lastKnownText.length);
-        lastKnownText = lastKnownText.slice(0, p) + insertText + lastKnownText.slice(p);
+        const p = Math.min(op.pos, editor.value.length);
+        editor.setRangeText(insertText, p, p, 'preserve');
         if (p <= curStart) curStart += insertText.length;
         if (p < curEnd) curEnd += insertText.length;
       } else if (op.type === 'delete') {
-        const p = Math.min(op.pos, lastKnownText.length);
-        const endP = Math.min(p + op.len, lastKnownText.length);
-        lastKnownText = lastKnownText.slice(0, p) + lastKnownText.slice(endP);
+        const p = Math.min(op.pos, editor.value.length);
+        const endP = Math.min(p + op.len, editor.value.length);
+        editor.setRangeText('', p, endP, 'preserve');
         if (endP <= curStart) curStart -= (endP - p);
         if (endP <= curEnd) curEnd -= (endP - p);
       }
 
-      rebuildEditorValueWithComposing();
+      committedText = editor.value;
       editor.setSelectionRange(curStart, curEnd);
-      editor.scrollTop = savedScrollTop;
+      editor.scrollTop = savedScrollTop; // 滾動條絕對錨定
     }
-
-    function rebuildEditorValueWithComposing() {
-      if (remoteComposingMap.size === 0) {
-        if (editor.value !== lastKnownText) editor.value = lastKnownText;
-        return;
-      }
-
-      const comps = Array.from(remoteComposingMap.values()).sort((a, b) => a.pos - b.pos);
-      let rendered = '';
-      let lastIdx = 0;
-
-      for (const c of comps) {
-        const p = Math.min(Math.max(c.pos, 0), lastKnownText.length);
-        rendered += lastKnownText.substring(lastIdx, p) + c.text;
-        lastIdx = p;
-      }
-      rendered += lastKnownText.substring(lastIdx);
-
-      const savedStart = editor.selectionStart;
-      const savedEnd = editor.selectionEnd;
-      const savedTop = editor.scrollTop;
-
-      if (editor.value !== rendered) {
-        editor.value = rendered;
-        editor.setSelectionRange(savedStart, savedEnd);
-        editor.scrollTop = savedTop;
-      }
-    }
-
-    // 🌟 效能優化 2：微秒級防抖（16ms 微合併，消除封包塞車與打字黏滯感）
-    let liveTypingTimer = null;
-    let pendingTypingStr = '';
-    function broadcastLiveTyping(str) {
-      pendingTypingStr = str;
-      clearTimeout(liveTypingTimer);
-      liveTypingTimer = setTimeout(() => {
-        socket.emit('live_composing_stream', {
-          room: roomId,
-          pos: editor.selectionStart,
-          composing_text: pendingTypingStr
-        });
-        socket.emit('cursor_move', {
-          room: roomId,
-          cursor_index: editor.selectionStart
-        });
-      }, 16);
-    }
-
-    socket.on('remote_composing_stream', data => {
-      if (!data || !data.sid || data.sid === socket.id) return;
-      const text = data.composing_text || '';
-      if (text.length > 0) {
-        remoteComposingMap.set(data.sid, { pos: data.pos, text: text });
-      } else {
-        remoteComposingMap.delete(data.sid);
-      }
-      rebuildEditorValueWithComposing();
-      scheduleUIRender();
-    });
 
     function bindEditorEvents() {
-      editor.addEventListener('compositionstart', (e) => { 
+      editor.addEventListener('compositionstart', () => { 
         isComposing = true; 
-        broadcastLiveTyping(e.data || '...');
-      });
-
-      editor.addEventListener('compositionupdate', (e) => {
-        broadcastLiveTyping(e.data || '');
       });
 
       editor.addEventListener('input', (e) => {
-        if (e.isComposing || isComposing) {
-          if (e.data) broadcastLiveTyping(e.data);
-          return;
-        }
-        broadcastLiveTyping('');
+        if (e.isComposing || isComposing) return;
         handleLocalTyping();
       });
       
       editor.addEventListener('compositionend', () => {
         isComposing = false;
-        broadcastLiveTyping('');
         handleLocalTyping();
       });
 
@@ -1161,7 +1075,8 @@
       });
 
       editor.addEventListener('scroll', () => {
-        scheduleUIRender();
+        redrawAllRemoteCursors();
+        updateEndLinePosition();
       });
     }
     bindEditorEvents();
@@ -1182,15 +1097,12 @@
     });
 
     socket.on('cursor_remove', data => {
-      if (data && data.sid) {
-        remoteComposingMap.delete(data.sid);
-        if (remoteCursors.has(data.sid)) {
-          const item = remoteCursors.get(data.sid);
-          if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
-          remoteCursors.delete(data.sid);
-        }
-        rebuildEditorValueWithComposing();
-        scheduleUIRender();
+      if (data && data.sid && remoteCursors.has(data.sid)) {
+        const item = remoteCursors.get(data.sid);
+        if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
+        remoteCursors.delete(data.sid);
+        redrawAllRemoteCursors();
+        updateEndLinePosition();
       }
     });
 
@@ -1218,7 +1130,7 @@
         item.index = cursorIndex;
       }
 
-      scheduleUIRender();
+      renderSingleRemoteCursor(sid);
     }
 
     function updateAllCursorTags() {
@@ -1301,7 +1213,8 @@
     }
 
     window.addEventListener('resize', () => { 
-      scheduleUIRender();
+      redrawAllRemoteCursors(); 
+      updateEndLinePosition();
     });
 
     function applyLocalStyle() {
@@ -1318,7 +1231,8 @@
         editor.style.transform = `scale(${scaleVal})`;
         editor.style.width = `${100 / scaleVal}%`;
       }
-      scheduleUIRender();
+      redrawAllRemoteCursors();
+      updateEndLinePosition();
     }
 
     function applyAndSync() { 
@@ -1401,7 +1315,7 @@
       URL.revokeObjectURL(a.href);
     }
     function exportTxt(withHeader = false) {
-      const text = lastKnownText.trimEnd();
+      const text = editor.value.trimEnd();
       if (!text.trim()) { alert('目前尚無內容！'); return; }
       let content = text;
       if (withHeader) {
@@ -1410,7 +1324,7 @@
       downloadBlob(new Blob(["\uFEFF" + content], { type: 'text/plain;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.txt`);
     }
     function exportDoc() {
-      const text = lastKnownText.trimEnd();
+      const text = editor.value.trimEnd();
       if (!text.trim()) { alert('目前尚無內容！'); return; }
       const formattedHtml = text.split('\n').map(p => `<p style="margin:0 0 8px 0;line-height:1.2;">${p||'&nbsp;'}</p>`).join('');
       const wordHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>聽打逐字稿</title><style>body{font-family:"標楷體",serif;font-size:14pt;line-height:1.2;}</style></head><body>${formattedHtml}</body></html>`;
@@ -1589,7 +1503,7 @@
 
     applyLocalStyle();
     updateWordCount();
-    scheduleUIRender();
+    updateEndLinePosition();
   </script>
 </body>
 </html>
