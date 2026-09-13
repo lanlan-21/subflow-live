@@ -10,7 +10,7 @@ app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 伺服器端資料庫：保存全域文字、版本、OT 歷史隊列與房間設定
+# 伺服器端房間狀態
 rooms = {}
 
 cleanup_timers = {}
@@ -24,7 +24,7 @@ def schedule_room_cleanup(room_id):
         if room_id in rooms:
             total_connected = len(rooms[room_id].get("editors", set())) + len(rooms[room_id].get("viewers", set()))
             if total_connected == 0:
-                print(f"[自動清理] 房間 {room_id} 閒置達 30 分鐘，清空記憶體釋放資源。")
+                print(f"[自動清理] 房間 {room_id} 閒置達 30 分鐘，釋放記憶體。")
                 rooms.pop(room_id, None)
         cleanup_timers.pop(room_id, None)
 
@@ -40,7 +40,7 @@ def cancel_room_cleanup(room_id):
         timer.cancel()
 
 
-# 🌟 Google Docs 級 OT（Operational Transformation）演算法
+# 🌟 OT 坐標轉換：雙人共筆時字元各自平移保留，絕不疊字吃字
 def transform_op(op, against):
     t_type = op['type']
     a_type = against['type']
@@ -142,7 +142,7 @@ def handle_join(data):
             "text": "",
             "version": 0,
             "history": [],
-            "settings": {"size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
+            "settings": {"theme": "dark", "size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
             "master_sid": None,
             "editors": set(),
             "viewers": set()
@@ -150,7 +150,7 @@ def handle_join(data):
 
     join_room(room_id)
 
-    # 嚴格區分身分：只有工作台協作員才能成為 master_sid，大螢幕絕對為純唯讀
+    # 嚴格區分身分
     if is_editor:
         rooms[room_id]["editors"].add(sid)
         if rooms[room_id]["master_sid"] is None:
@@ -187,12 +187,12 @@ def handle_client_operation(data):
         emit('remote_operation', {
             'version': rdata["version"],
             'is_clear': True,
+            'full_text': '',
             'sender_sid': sid
         }, to=room_id, include_self=False)
         emit('ack_operation', {'version': rdata["version"]}, to=sid)
         return
 
-    # 換行統一標準化為單一字元 \n，長度索引零誤差
     ops = []
     for op in raw_ops:
         if op.get('type') == 'insert':
@@ -219,10 +219,12 @@ def handle_client_operation(data):
 
     emit('ack_operation', {'version': rdata["version"]}, to=sid)
 
+    # 🌟 同步廣播：既包含差量 ops 給協作夥伴，也帶上全域 text 給觀眾端 100% 絕對投影
     if transformed_ops:
         emit('remote_operation', {
             'version': rdata["version"],
             'ops': transformed_ops,
+            'full_text': rdata["text"],
             'sender_sid': sid
         }, to=room_id, include_self=False)
 
@@ -232,11 +234,11 @@ def handle_update_settings(data):
     room_id = data.get('room')
     sid = request.sid
     if room_id in rooms and sid == rooms[room_id].get("master_sid"):
+        rooms[room_id]["settings"]["theme"] = data.get('theme', 'dark')
         rooms[room_id]["settings"]["size"] = data.get('size', 48)
         rooms[room_id]["settings"]["scale"] = data.get('scale', 100)
         rooms[room_id]["settings"]["pad_x"] = data.get('pad_x', 8)
         rooms[room_id]["settings"]["pad_y"] = data.get('pad_y', 10)
-        # 廣播大螢幕與搭檔同步縮放
         emit('sync_settings', rooms[room_id]["settings"], to=room_id, include_self=False)
 
 
