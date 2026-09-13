@@ -210,7 +210,6 @@
       overflow: hidden !important;
     }
 
-    /* 🌟 聽打輸入框：自身輸入永遠 100% 實體可見，打注音清晰銳利 */
     #editor {
       width: 100%;
       height: 100%;
@@ -278,7 +277,6 @@
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
     }
 
-    /* 🌟 Google Docs 級夥伴游標線 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -665,7 +663,6 @@
     let bufferOps = [];
     let lastKnownText = "";
 
-    // 🌟 記錄夥伴未定稿暫存字：{ sid: { pos: 0, text: '' } }
     const remoteComposingMap = new Map();
     const remoteCursors = new Map();
 
@@ -814,6 +811,7 @@
       endLineMarker.style.width = (editor.clientWidth - ((parseFloat(cs.paddingLeft)||8)*2)) + 'px';
     }
 
+    // 🌟 正確連線處理
     socket.on('connect', () => { 
       socket.emit('join', { room: roomId, is_editor: true }); 
     });
@@ -901,7 +899,6 @@
       return ops;
     }
 
-    // 🌟 本地定稿打字
     function handleLocalTyping() {
       const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (editor.value !== currentText) editor.value = currentText;
@@ -947,12 +944,13 @@
       }
     });
 
+    // 🌟 修正 JavaScript 邏輯運算子（全面使用標準 &&）
     function transformOp(op1, op2, priority) {
       if (!op1 || !op2) return op1;
       const t1 = op1.type, p1 = op1.pos;
       const t2 = op2.type, p2 = op2.pos;
 
-      if (t1 === 'insert' and t2 === 'insert') {
+      if (t1 === 'insert' && t2 === 'insert') {
         const l2 = op2.text.length;
         if (p1 < p2 || (p1 === p2 && priority === 'left')) {
           return { type: 'insert', pos: p1, text: op1.text };
@@ -984,7 +982,6 @@
       return op1;
     }
 
-    // 🌟 定稿同步：定稿進入時，立刻清空該夥伴的暫存推展
     socket.on('remote_operation', data => {
       if (!data || data.sender_sid === socket.id) return;
 
@@ -1000,7 +997,6 @@
         return;
       }
 
-      // 清空該夥伴的臨時推移
       if (data.sender_sid) {
         remoteComposingMap.delete(data.sender_sid);
       }
@@ -1057,20 +1053,18 @@
         if (endP <= curEnd) curEnd -= (endP - p);
       }
 
-      // 重新渲染包含可能存在的其他夥伴暫存字
       rebuildEditorValueWithComposing();
       editor.setSelectionRange(curStart, curEnd);
       editor.scrollTop = savedScrollTop;
     }
 
-    // 🌟 核心：將 lastKnownText 加上所有夥伴正在敲的注音，即時在畫面把字往後推開！
+    // 🌟 將夥伴正在敲的注音行內組裝，即時推開後方的字
     function rebuildEditorValueWithComposing() {
       if (remoteComposingMap.size === 0) {
         editor.value = lastKnownText;
         return;
       }
 
-      // 按照插入位置由小到大排列
       const comps = Array.from(remoteComposingMap.values()).sort((a, b) => a.pos - b.pos);
       let rendered = '';
       let lastIdx = 0;
@@ -1087,23 +1081,19 @@
       const savedTop = editor.scrollTop;
 
       editor.value = rendered;
-
       editor.setSelectionRange(savedStart, savedEnd);
       editor.scrollTop = savedTop;
     }
 
-    // 🌟 核心：毫秒級發送正在打的注音/暫存字，即時通知對方把字往後推
     let lastSentLiveComp = '';
     function broadcastLiveTyping(str) {
       if (str !== lastSentLiveComp) {
         lastSentLiveComp = str;
-        // 1. 廣播給夥伴：通知「我在這個字元位置敲注音，請把我後面的字往後推！」
         socket.emit('live_composing_stream', {
           room: roomId,
           pos: editor.selectionStart,
           composing_text: str
         });
-        // 2. 廣播給游標
         socket.emit('cursor_move', {
           room: roomId,
           cursor_index: editor.selectionStart
@@ -1111,7 +1101,6 @@
       }
     }
 
-    // 🌟 接收夥伴在行內敲注音的動作：立刻把字往後推開！
     socket.on('remote_composing_stream', data => {
       if (!data || !data.sid || data.sid === socket.id) return;
       const text = data.composing_text || '';
@@ -1120,40 +1109,34 @@
       } else {
         remoteComposingMap.delete(data.sid);
       }
-      // 🌟 重新組裝畫面：字元立刻在夥伴游標處被推進推開！
       rebuildEditorValueWithComposing();
       redrawAllRemoteCursors();
       updateEndLinePosition();
     });
 
     function bindEditorEvents() {
-      // 監聽微軟注音開始組字（例如按 ㄍ）
       editor.addEventListener('compositionstart', (e) => { 
         isComposing = true; 
         broadcastLiveTyping(e.data || '...');
       });
 
-      // 監聽注音拼音字根跳動（例如按 ㄍ、ㄠ、ㄒ）
       editor.addEventListener('compositionupdate', (e) => {
         broadcastLiveTyping(e.data || '');
       });
 
       editor.addEventListener('input', (e) => {
-        // 如果正在打注音，即刻推擠對方畫面
         if (e.isComposing || isComposing) {
           if (e.data) broadcastLiveTyping(e.data);
           return;
         }
-        // 若直接按定稿或貼上
         broadcastLiveTyping('');
         handleLocalTyping();
       });
       
-      // 按 Enter 或空格確定定稿
       editor.addEventListener('compositionend', () => {
         isComposing = false;
-        broadcastLiveTyping(''); // 通知對方清空臨時推展
-        handleLocalTyping();     // 固化真實文字
+        broadcastLiveTyping('');
+        handleLocalTyping();
       });
 
       editor.addEventListener('click', broadcastCursorOnly);
