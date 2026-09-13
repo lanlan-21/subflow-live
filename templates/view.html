@@ -5,27 +5,34 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>即時聽打投影 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <!-- 🌟 引入 Google 繁體正統楷書 WebFont CDN（保證沒有微軟標楷體的電腦或外接盒 100% 正確顯示標楷體） -->
+  <!-- 🌟 Google 繁體正統楷書 WebFont CDN -->
   <link rel="stylesheet" href="https://fonts.googleapis.com/earlyaccess/cwtexkai.css">
   <style>
     * { box-sizing: border-box; }
     
-    /* 🌟 主題配色與主控台嚴格一對一同步 */
     body[data-theme="dark"] {
       --bg-main: #000000;
       --text-color: #ffff33;
+      --ghost-color: rgba(255, 255, 51, 0.75);
+      --ghost-underline: #ffff33;
     }
     body[data-theme="green"] {
       --bg-main: #c7edcc;
       --text-color: #111827;
+      --ghost-color: rgba(17, 24, 39, 0.7);
+      --ghost-underline: #047857;
     }
     body[data-theme="navy"] {
       --bg-main: #0b132b;
       --text-color: #e0e1dd;
+      --ghost-color: rgba(224, 225, 221, 0.75);
+      --ghost-underline: #38bdf8;
     }
     body[data-theme="light"] {
       --bg-main: #ffffff;
       --text-color: #0f172a;
+      --ghost-color: rgba(15, 23, 42, 0.7);
+      --ghost-underline: #2563eb;
     }
 
     html, body {
@@ -35,7 +42,6 @@
       height: 100%;
       background: var(--bg-main, #000000);
       color: var(--text-color, #ffff33);
-      /* 🌟 楷體完整優先級序列：本地有微軟標楷體用本地，沒有則用 cwTeXKai 雲端標楷體 */
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "cwTeXKai", "Kaiti TC", "STKaiti", serif !important;
       overflow-x: hidden;
       overflow-y: auto;
@@ -151,7 +157,6 @@
       box-shadow: 0 0 6px #22c55e;
     }
 
-    /* 🌟 大螢幕內文投影區：強制標準正統標楷體 */
     #displayArea {
       width: 100%;
       min-height: 100%;
@@ -167,6 +172,18 @@
       padding: 60px 16px 140px 16px;
     }
 
+    /* 🌟 即時敲字幽靈串流標籤（正在打的注音或字，帶有呼吸底線） */
+    #liveGhostSpan {
+      display: inline;
+      color: var(--ghost-color);
+      border-bottom: 3px dashed var(--ghost-underline);
+      animation: ghostBlink 0.9s infinite alternate;
+    }
+    @keyframes ghostBlink {
+      from { opacity: 0.6; }
+      to { opacity: 1; }
+    }
+
     body.is-fullscreen .viewer-toolbar {
       transform: translateY(-90%);
     }
@@ -178,7 +195,6 @@
 <body data-theme="dark">
 
   <div class="viewer-toolbar" id="viewerToolbar">
-    <!-- 1. 觀看比例微調（調整比例絕對不中斷自動捲動） -->
     <div class="control-group">
       <label for="scaleInput">觀看比例：</label>
       <input type="number" id="scaleInput" class="size-input" value="100" min="40" max="250" step="5" onchange="applyCurrentScale()">%
@@ -186,7 +202,6 @@
       <button class="btn-step" onclick="stepScale(-5)">-5%</button>
     </div>
 
-    <!-- 2. 跟隨狀態按鈕 -->
     <button class="btn btn-following" id="followBtn" onclick="onClickFollowButton()">
       🔗 跟隨主投影中（自動跳底）
     </button>
@@ -201,12 +216,14 @@
     </div>
   </div>
 
-  <div id="displayArea"></div>
+  <div id="displayArea"><span id="solidText"></span><span id="liveGhostSpan" style="display: none;"></span></div>
 
   <script>
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     const roomId = "{{ room_id }}";
     const displayArea = document.getElementById('displayArea');
+    const solidText = document.getElementById('solidText');
+    const liveGhostSpan = document.getElementById('liveGhostSpan');
     const scaleInput = document.getElementById('scaleInput');
     const followBtn = document.getElementById('followBtn');
     const viewerToolbar = document.getElementById('viewerToolbar');
@@ -241,9 +258,7 @@
         displayArea.style.transform = `scale(${scaleVal})`;
         displayArea.style.width = `${100 / scaleVal}%`;
       }
-      if (isAutoScrolling) {
-        scrollToBottom();
-      }
+      if (isAutoScrolling) scrollToBottom();
     }
 
     function onClickFollowButton() {
@@ -272,7 +287,6 @@
       });
     }
 
-    // 只有主動往上滑看舊紀錄才會暫停跳底；滑到底部自動切回跟隨
     window.addEventListener('scroll', () => {
       const scrollPos = window.innerHeight + window.scrollY;
       const threshold = document.documentElement.scrollHeight - 80;
@@ -294,15 +308,15 @@
       document.body.classList.toggle('is-fullscreen', !!document.fullscreenElement);
     });
 
-    // 🌟 連線（純唯讀觀眾）
     socket.on('connect', () => {
       socket.emit('join', { room: roomId, is_editor: false });
     });
 
-    // 初始化全篇文字與設定
     socket.on('init_document', data => {
       if (!data) return;
-      displayArea.innerText = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      solidText.innerText = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      liveGhostSpan.style.display = 'none';
+      liveGhostSpan.innerText = '';
       if (data.settings) {
         masterSettings = data.settings;
         applyMasterSettings(masterSettings);
@@ -310,19 +324,36 @@
       setTimeout(scrollToBottom, 60);
     });
 
-    // 🌟 核心同步：優先直接以主控最新權威內文（full_text）呈現，零延遲、絕對零丟字
+    // 🌟 核心：接收即時注音/組字串流（未按 Enter 也能立刻在大螢幕末端跳動！）
+    socket.on('audience_live_composing', data => {
+      if (!data) return;
+      const compText = data.composing_text || '';
+      if (compText.trim().length > 0) {
+        liveGhostSpan.innerText = compText;
+        liveGhostSpan.style.display = 'inline';
+      } else {
+        liveGhostSpan.innerText = '';
+        liveGhostSpan.style.display = 'none';
+      }
+      if (isAutoScrolling) scrollToBottom();
+    });
+
+    // 🌟 收到確認定稿動作：幽靈字清空，固化正式內文
     socket.on('remote_operation', data => {
       if (!data) return;
 
+      liveGhostSpan.innerText = '';
+      liveGhostSpan.style.display = 'none';
+
       if (data.is_clear) {
-        displayArea.innerText = '';
+        solidText.innerText = '';
         return;
       }
 
       if (data.full_text !== undefined) {
-        displayArea.innerText = data.full_text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        solidText.innerText = data.full_text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       } else {
-        let text = displayArea.innerText;
+        let text = solidText.innerText;
         const ops = data.ops || [];
         for (const op of ops) {
           if (op.type === 'insert') {
@@ -335,15 +366,12 @@
             text = text.slice(0, p) + text.slice(endP);
           }
         }
-        displayArea.innerText = text;
+        solidText.innerText = text;
       }
 
-      if (isAutoScrolling) {
-        scrollToBottom();
-      }
+      if (isAutoScrolling) scrollToBottom();
     });
 
-    // 🌟 主控端修改設定（底色主題、字級、邊距）時即時同步
     socket.on('sync_settings', settings => {
       masterSettings = settings;
       applyMasterSettings(settings);
@@ -352,7 +380,6 @@
     function applyMasterSettings(settings) {
       if (!settings) return;
 
-      // 底色主題跟隨
       if (settings.theme) {
         document.body.setAttribute('data-theme', settings.theme);
       }
@@ -376,9 +403,7 @@
       const py = (settings.pad_y !== undefined ? settings.pad_y : 16) + 'px';
       displayArea.style.padding = `${py} ${px} 140px ${px}`;
 
-      if (isAutoScrolling) {
-        scrollToBottom();
-      }
+      if (isAutoScrolling) scrollToBottom();
     }
   </script>
 </body>
