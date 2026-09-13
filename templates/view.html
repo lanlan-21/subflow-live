@@ -5,24 +5,44 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>即時聽打投影 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <!-- 🌟 引入 Google 繁體正統楷書 WebFont CDN（保證沒有微軟標楷體的電腦或外接盒 100% 正確顯示標楷體） -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/earlyaccess/cwtexkai.css">
   <style>
     * { box-sizing: border-box; }
     
+    /* 🌟 主題配色與主控台嚴格一對一同步 */
+    body[data-theme="dark"] {
+      --bg-main: #000000;
+      --text-color: #ffff33;
+    }
+    body[data-theme="green"] {
+      --bg-main: #c7edcc;
+      --text-color: #111827;
+    }
+    body[data-theme="navy"] {
+      --bg-main: #0b132b;
+      --text-color: #e0e1dd;
+    }
+    body[data-theme="light"] {
+      --bg-main: #ffffff;
+      --text-color: #0f172a;
+    }
+
     html, body {
       margin: 0;
       padding: 0;
       width: 100%;
       height: 100%;
-      background: #000000;
-      color: #ffff33;
-      /* 🌟 強制全域鎖定標準標楷體 */
-      font-family: "DFKai-SB", "BiauKai", "標楷體", serif !important;
+      background: var(--bg-main, #000000);
+      color: var(--text-color, #ffff33);
+      /* 🌟 楷體完整優先級序列：本地有微軟標楷體用本地，沒有則用 cwTeXKai 雲端標楷體 */
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "cwTeXKai", "Kaiti TC", "STKaiti", serif !important;
       overflow-x: hidden;
       overflow-y: auto;
       scroll-behavior: smooth;
+      transition: background 0.25s ease, color 0.25s ease;
     }
 
-    /* 頂部極簡控制列（字型維持介面黑體，不影響內文投影） */
     .viewer-toolbar {
       position: fixed;
       top: 0;
@@ -131,15 +151,15 @@
       box-shadow: 0 0 6px #22c55e;
     }
 
-    /* 🌟 大螢幕內文投影區：絕對強制標準標楷體 */
+    /* 🌟 大螢幕內文投影區：強制標準正統標楷體 */
     #displayArea {
       width: 100%;
       min-height: 100%;
-      font-family: "DFKai-SB", "BiauKai", "標楷體", serif !important;
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "cwTeXKai", "Kaiti TC", "STKaiti", serif !important;
       font-size: 48px;
       line-height: 1.25;
       letter-spacing: 0px;
-      color: #ffff33;
+      color: var(--text-color, #ffff33);
       white-space: pre-wrap;
       word-break: break-all;
       text-align: justify;
@@ -155,10 +175,10 @@
     }
   </style>
 </head>
-<body>
+<body data-theme="dark">
 
   <div class="viewer-toolbar" id="viewerToolbar">
-    <!-- 1. 觀看比例微調（獨立調整，絕不中斷自動捲動） -->
+    <!-- 1. 觀看比例微調（調整比例絕對不中斷自動捲動） -->
     <div class="control-group">
       <label for="scaleInput">觀看比例：</label>
       <input type="number" id="scaleInput" class="size-input" value="100" min="40" max="250" step="5" onchange="applyCurrentScale()">%
@@ -166,7 +186,7 @@
       <button class="btn-step" onclick="stepScale(-5)">-5%</button>
     </div>
 
-    <!-- 2. 核心模式按鈕：只有在往上滑時才切換，點擊立刻跳回最新進度 -->
+    <!-- 2. 跟隨狀態按鈕 -->
     <button class="btn btn-following" id="followBtn" onclick="onClickFollowButton()">
       🔗 跟隨主投影中（自動跳底）
     </button>
@@ -191,12 +211,11 @@
     const followBtn = document.getElementById('followBtn');
     const viewerToolbar = document.getElementById('viewerToolbar');
 
-    let isAutoScrolling = true;    // 是否保持自動捲動至最新字幕
-    let hasUserCustomScale = false; // 是否自行手動微調過比例
-    let masterSettings = null;     // 主控端最新的設定快照
+    let isAutoScrolling = true;
+    let hasUserCustomScale = false;
+    let masterSettings = null;
     let toolbarTimer = null;
 
-    // 工具列 4 秒無動作自動淡化
     function resetToolbarDim() {
       viewerToolbar.classList.remove('dimmed');
       clearTimeout(toolbarTimer);
@@ -207,7 +226,6 @@
     window.addEventListener('mousemove', resetToolbarDim);
     resetToolbarDim();
 
-    // 🌟 1. 觀眾調整比例：純粹縮放畫面，絕對不干擾自動捲動！
     function stepScale(delta) {
       let currentVal = parseInt(scaleInput.value, 10) || 100;
       scaleInput.value = Math.min(Math.max(currentVal + delta, 40), 250);
@@ -215,7 +233,7 @@
     }
 
     function applyCurrentScale() {
-      hasUserCustomScale = true; // 標記為觀眾自訂比例
+      hasUserCustomScale = true;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       if ('zoom' in displayArea.style) {
         displayArea.style.zoom = scaleVal;
@@ -228,7 +246,6 @@
       }
     }
 
-    // 🌟 2. 點擊按鈕：一鍵切回自動捲動至最新字詞
     function onClickFollowButton() {
       if (!isAutoScrolling) {
         setAutoScrollingMode(true);
@@ -255,7 +272,7 @@
       });
     }
 
-    // 🌟 3. 只有「主動往上滑動看歷史」才會暫停跳底；滑到底部自動回歸跟隨
+    // 只有主動往上滑看舊紀錄才會暫停跳底；滑到底部自動切回跟隨
     window.addEventListener('scroll', () => {
       const scrollPos = window.innerHeight + window.scrollY;
       const threshold = document.documentElement.scrollHeight - 80;
@@ -277,11 +294,12 @@
       document.body.classList.toggle('is-fullscreen', !!document.fullscreenElement);
     });
 
-    // 連線（純唯讀觀眾）
+    // 🌟 連線（純唯讀觀眾）
     socket.on('connect', () => {
       socket.emit('join', { room: roomId, is_editor: false });
     });
 
+    // 初始化全篇文字與設定
     socket.on('init_document', data => {
       if (!data) return;
       displayArea.innerText = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -292,7 +310,7 @@
       setTimeout(scrollToBottom, 60);
     });
 
-    // 接收 OT 最新文字
+    // 🌟 核心同步：優先直接以主控最新權威內文（full_text）呈現，零延遲、絕對零丟字
     socket.on('remote_operation', data => {
       if (!data) return;
 
@@ -301,28 +319,31 @@
         return;
       }
 
-      let text = displayArea.innerText;
-      const ops = data.ops || [];
-
-      for (const op of ops) {
-        if (op.type === 'insert') {
-          const insertText = op.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-          const p = Math.min(op.pos, text.length);
-          text = text.slice(0, p) + insertText + text.slice(p);
-        } else if (op.type === 'delete') {
-          const p = Math.min(op.pos, text.length);
-          const endP = Math.min(p + op.len, text.length);
-          text = text.slice(0, p) + text.slice(endP);
+      if (data.full_text !== undefined) {
+        displayArea.innerText = data.full_text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      } else {
+        let text = displayArea.innerText;
+        const ops = data.ops || [];
+        for (const op of ops) {
+          if (op.type === 'insert') {
+            const insertText = op.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            const p = Math.min(op.pos, text.length);
+            text = text.slice(0, p) + insertText + text.slice(p);
+          } else if (op.type === 'delete') {
+            const p = Math.min(op.pos, text.length);
+            const endP = Math.min(p + op.len, text.length);
+            text = text.slice(0, p) + text.slice(endP);
+          }
         }
+        displayArea.innerText = text;
       }
 
-      displayArea.innerText = text;
       if (isAutoScrolling) {
         scrollToBottom();
       }
     });
 
-    // 主控端修改設定時同步廣播
+    // 🌟 主控端修改設定（底色主題、字級、邊距）時即時同步
     socket.on('sync_settings', settings => {
       masterSettings = settings;
       applyMasterSettings(settings);
@@ -330,6 +351,11 @@
 
     function applyMasterSettings(settings) {
       if (!settings) return;
+
+      // 底色主題跟隨
+      if (settings.theme) {
+        document.body.setAttribute('data-theme', settings.theme);
+      }
 
       if (settings.size) {
         displayArea.style.fontSize = settings.size + 'px';
