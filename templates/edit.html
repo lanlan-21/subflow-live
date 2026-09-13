@@ -13,24 +13,28 @@
       --bg-editor: #121212;
       --text-color: #ffff33;
       --caret-color: #ffff33;
+      --composing-color: #fde047;
     }
     body[data-theme="green"] {
       --bg-main: #c7edcc;
       --bg-editor: #d2edd2;
       --text-color: #111827;
       --caret-color: #047857;
+      --composing-color: #065f46;
     }
     body[data-theme="navy"] {
       --bg-main: #0b132b;
       --bg-editor: #1c2541;
       --text-color: #e0e1dd;
       --caret-color: #38bdf8;
+      --composing-color: #38bdf8;
     }
     body[data-theme="light"] {
       --bg-main: #f1f5f9;
       --bg-editor: #ffffff;
       --text-color: #0f172a;
       --caret-color: #0f172a;
+      --composing-color: #1d4ed8;
     }
 
     body {
@@ -210,6 +214,39 @@
       overflow: hidden !important;
     }
 
+    /* 🌟 Google Docs 級同步展示畫布（底層自然推移） */
+    #editorDisplayLayer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      padding: 16px 8px 60px 8px;
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
+      font-size: 48px;
+      line-height: 1.15;
+      letter-spacing: 0px;
+      color: var(--text-color);
+      white-space: pre-wrap;
+      word-break: break-all;
+      text-align: justify;
+      transform-origin: top left;
+      pointer-events: none;
+      z-index: 5;
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+
+    /* 夥伴正在補字時行內撐開的注音/預選字（自動把後方的字往後推） */
+    .partner-inline-composing {
+      display: inline;
+      color: var(--composing-color);
+      border-bottom: 2px solid var(--composing-color);
+      font-weight: 500;
+      letter-spacing: 0px;
+      margin: 0 1px;
+    }
+
     #editor {
       width: 100%;
       height: 100%;
@@ -221,7 +258,7 @@
       font-size: 48px;
       line-height: 1.15;
       letter-spacing: 0px;
-      color: var(--text-color);
+      color: transparent; /* 文字由展示層負責自然推開渲染 */
       background: transparent;
       caret-color: var(--caret-color);
       white-space: pre-wrap;
@@ -277,7 +314,7 @@
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
     }
 
-    /* 🌟 純淨 Google Docs 級光標：只有細豎線與頭銜標籤，絕無半透明蓋字層 */
+    /* 🌟 夥伴游標線（Google Docs 質感細線） */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -588,7 +625,9 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... 支援雙人穩定差量同步"></textarea>
+      <!-- 🌟 Google Docs 級即時推展展示畫布 -->
+      <div id="editorDisplayLayer"></div>
+      <textarea id="editor" placeholder="在此打字... 支援雙人即時推移共筆"></textarea>
       <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
@@ -636,6 +675,7 @@
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     const roomId = "{{ room_id }}";
     let editor = document.getElementById('editor');
+    const editorDisplayLayer = document.getElementById('editorDisplayLayer');
     const editorContainer = document.getElementById('editorContainer');
     const mirrorDiv = document.getElementById('mirrorDiv');
     const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
@@ -658,6 +698,7 @@
     let amIMaster = true;
     let currentMasterSid = null;
     let isComposing = false;
+    let localComposingText = '';
 
     let serverVersion = 0;
     let inFlightOp = null;
@@ -729,6 +770,7 @@
               base_version: serverVersion,
               ops: [{ type: 'insert', pos: 0, text: clean }]
             });
+            renderDisplayLayer();
             updateWordCount();
             updateEndLinePosition();
           }
@@ -759,6 +801,7 @@
           is_clear: true
         });
 
+        renderDisplayLayer();
         updateWordCount();
         updateEndLinePosition();
         editor.focus();
@@ -777,6 +820,46 @@
       }
     }
     window.onbeforeunload = handleBeforeUnload;
+
+    // 🌟 核心：Google Docs 級即時行內推移渲染器
+    function renderDisplayLayer() {
+      const fullText = editor.value;
+      editorDisplayLayer.innerHTML = '';
+
+      // 蒐集所有協作夥伴正在敲的注音與位置
+      const activePartnerTyping = [];
+      remoteCursors.forEach((item) => {
+        if (item.typingText && item.typingText.trim().length > 0) {
+          activePartnerTyping.push({
+            pos: Math.min(Math.max(item.index, 0), fullText.length),
+            text: item.typingText
+          });
+        }
+      });
+
+      // 依位置排序
+      activePartnerTyping.sort((a, b) => a.pos - b.pos);
+
+      let lastIndex = 0;
+      for (const p of activePartnerTyping) {
+        // 先輸出游標前的正常文字
+        if (p.pos > lastIndex) {
+          editorDisplayLayer.appendChild(document.createTextNode(fullText.substring(lastIndex, p.pos)));
+        }
+        // 🌟 行內撐開空間：插入夥伴正在敲的注音（字元自動向後推移！）
+        const inlineSpan = document.createElement('span');
+        inlineSpan.className = 'partner-inline-composing';
+        inlineSpan.textContent = p.text;
+        editorDisplayLayer.appendChild(inlineSpan);
+
+        lastIndex = p.pos;
+      }
+
+      // 輸出剩餘文字
+      if (lastIndex < fullText.length) {
+        editorDisplayLayer.appendChild(document.createTextNode(fullText.substring(lastIndex)));
+      }
+    }
 
     function updateEndLinePosition() {
       if (!editor) return;
@@ -821,6 +904,7 @@
       serverVersion = data.version || 0;
       inFlightOp = null;
       bufferOps = [];
+      renderDisplayLayer();
       updateWordCount();
       updateEndLinePosition();
 
@@ -899,6 +983,8 @@
     function handleLocalTyping() {
       const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (editor.value !== currentText) editor.value = currentText;
+
+      renderDisplayLayer(); // 即時重繪展示層
 
       if (currentText === lastKnownText) return;
 
@@ -987,6 +1073,7 @@
         serverVersion = data.version;
         inFlightOp = null;
         bufferOps = [];
+        renderDisplayLayer();
         updateWordCount();
         updateEndLinePosition();
         return;
@@ -1020,6 +1107,7 @@
         }
       }
 
+      renderDisplayLayer();
       updateWordCount();
       updateEndLinePosition();
       saveToLocalBlackbox();
@@ -1049,15 +1137,18 @@
       editor.scrollTop = savedScrollTop;
     }
 
+    // 🌟 毫秒級行內推展廣播：敲鍵即時發送注音/字詞
     let lastSentComposing = '';
     function broadcastLiveTyping(str) {
       if (str !== lastSentComposing) {
         lastSentComposing = str;
+        // 1. 廣播給夥伴游標位置與正在敲的注音內容
         socket.emit('cursor_move', {
           room: roomId,
           cursor_index: editor.selectionStart,
           typing_text: str
         });
+        // 2. 廣播給大螢幕
         if (amIMaster) {
           socket.emit('live_composing', {
             room: roomId,
@@ -1070,24 +1161,29 @@
     function bindEditorEvents() {
       editor.addEventListener('compositionstart', (e) => { 
         isComposing = true; 
-        broadcastLiveTyping(e.data || '...');
+        localComposingText = e.data || '';
+        broadcastLiveTyping(localComposingText);
       });
 
       editor.addEventListener('compositionupdate', (e) => {
-        broadcastLiveTyping(e.data || '');
+        localComposingText = e.data || '';
+        broadcastLiveTyping(localComposingText);
       });
 
       editor.addEventListener('input', (e) => {
         if (e.isComposing || isComposing) {
-          if (e.data) broadcastLiveTyping(e.data);
+          localComposingText = e.data || localComposingText;
+          broadcastLiveTyping(localComposingText);
           return;
         }
+        localComposingText = '';
         broadcastLiveTyping('');
         handleLocalTyping();
       });
       
-      editor.addEventListener('compositionend', (e) => {
+      editor.addEventListener('compositionend', () => {
         isComposing = false;
+        localComposingText = '';
         broadcastLiveTyping('');
         handleLocalTyping();
       });
@@ -1100,6 +1196,7 @@
       });
 
       editor.addEventListener('scroll', () => {
+        editorDisplayLayer.scrollTop = editor.scrollTop;
         redrawAllRemoteCursors();
         updateEndLinePosition();
       });
@@ -1116,9 +1213,11 @@
       }
     }
 
+    // 🌟 收到夥伴游標與敲注音狀態：立刻在行內撐開推移！
     socket.on('cursor_update', data => {
       if (!data || !data.sid || data.sid === socket.id) return;
-      updateRemoteCursor(data.sid, data.cursor_index);
+      updateRemoteCursor(data.sid, data.cursor_index, data.typing_text || '');
+      renderDisplayLayer(); // 行內即刻撐開推移！
     });
 
     socket.on('cursor_remove', data => {
@@ -1126,11 +1225,11 @@
         const item = remoteCursors.get(data.sid);
         if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
         remoteCursors.delete(data.sid);
+        renderDisplayLayer();
       }
     });
 
-    // 🌟 徹底拔除蓋在字上的半透明字體，僅保留細垂直線
-    function updateRemoteCursor(sid, cursorIndex) {
+    function updateRemoteCursor(sid, cursorIndex, typingText) {
       let item = remoteCursors.get(sid);
       if (!item) {
         const isTargetMaster = (sid === currentMasterSid);
@@ -1148,12 +1247,13 @@
 
         el.appendChild(tag);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag };
+        item = { index: cursorIndex, element: el, tagElement: tag, typingText: '' };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
       }
 
+      item.typingText = typingText || '';
       renderSingleRemoteCursor(sid);
     }
 
@@ -1247,13 +1347,22 @@
       const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
-      editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      editor.style.padding = `${py} ${px} 60px ${px}`;
+      const fs = (document.getElementById('fontSizeInput').value || 48) + 'px';
+      editor.style.fontSize = fs;
+      editorDisplayLayer.style.fontSize = fs;
+
+      const padStr = `${py} ${px} 60px ${px}`;
+      editor.style.padding = padStr;
+      editorDisplayLayer.style.padding = padStr;
+
       if ('zoom' in editor.style) {
         editor.style.zoom = scaleVal;
+        editorDisplayLayer.style.zoom = scaleVal;
       } else {
         editor.style.transform = `scale(${scaleVal})`;
         editor.style.width = `${100 / scaleVal}%`;
+        editorDisplayLayer.style.transform = `scale(${scaleVal})`;
+        editorDisplayLayer.style.width = `${100 / scaleVal}%`;
       }
       redrawAllRemoteCursors();
       updateEndLinePosition();
@@ -1526,6 +1635,7 @@
     }
 
     applyLocalStyle();
+    renderDisplayLayer();
     updateWordCount();
     updateEndLinePosition();
   </script>
