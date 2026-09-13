@@ -17,10 +17,10 @@
       --ghost-color: #38bdf8;
     }
     body[data-theme="green"] {
-      --bg-main: #c7edcc;      /* 經典護眼豆沙綠外底 */
-      --bg-editor: #d2edd2;    /* 柔和護眼內底 */
-      --text-color: #111827;   /* 高對比炭黑字 */
-      --caret-color: #047857;  /* 墨綠色游標 */
+      --bg-main: #c7edcc;
+      --bg-editor: #d2edd2;
+      --text-color: #111827;
+      --caret-color: #047857;
       --ghost-bg: rgba(4, 120, 87, 0.2);
       --ghost-color: #065f46;
     }
@@ -201,7 +201,6 @@
       transition: width 0.04s ease-out;
     }
 
-    /* 🌟 單一滾動軸統一化：徹底杜絕 5 行跳躍 */
     .editor-wrapper {
       flex: 1;
       display: flex;
@@ -216,7 +215,7 @@
       flex: 1;
       width: 100%;
       height: 100%;
-      overflow: hidden !important; /* 外層嚴格禁止滾動 */
+      overflow: hidden !important;
     }
 
     #editor {
@@ -226,7 +225,7 @@
       outline: none;
       resize: none;
       padding: 16px 8px 60px 8px;
-      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
       font-size: 48px;
       line-height: 1.15;
       letter-spacing: 0px;
@@ -241,9 +240,9 @@
       position: relative;
       z-index: 10;
       box-sizing: border-box;
-      overflow-y: auto !important; /* 唯一合法的原生滾動 */
+      overflow-y: auto !important;
       overflow-x: hidden !important;
-      overflow-anchor: none !important; /* 拔除滾動錨定 */
+      overflow-anchor: none !important;
     }
 
     #endLineMarker {
@@ -283,6 +282,7 @@
       word-break: break-all;
       text-align: justify;
       box-sizing: border-box;
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
     }
 
     .remote-cursor {
@@ -321,7 +321,7 @@
       border-bottom: 2px dashed var(--ghost-color);
       padding: 0 2px;
       border-radius: 2px;
-      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
       line-height: 1.15;
       letter-spacing: 0px;
       animation: ghostBlink 1s infinite alternate;
@@ -539,7 +539,7 @@
       🎙️ 語音辨識
     </button>
 
-    <!-- 🌟 底色切換 -->
+    <!-- 🌟 底色切換（支援廣播大螢幕同步） -->
     <div class="control-group" style="background: #27272a; padding: 3px 8px; border-radius: 6px; border: 1px solid #38bdf8;">
       <label for="themeSelect" style="font-weight: bold; color: #38bdf8;">🎨 編輯區底色：</label>
       <select id="themeSelect" onchange="changeTheme(this.value)" style="font-weight: bold; cursor: pointer; color: #fff;">
@@ -699,15 +699,26 @@
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
 
+    // 🌟 切換主題並廣播至觀眾投影端
     function changeTheme(themeName) {
       document.body.setAttribute('data-theme', themeName);
       try { localStorage.setItem('STT_PREFERRED_THEME', themeName); } catch(e) {}
+      if (amIMaster) {
+        socket.emit('update_settings', {
+          room: roomId,
+          theme: themeName,
+          size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
+          scale: parseInt(scaleInput.value, 10) || 100,
+          pad_x: parseInt(padXInput.value, 10) || 8,
+          pad_y: parseInt(padYInput.value, 10) || 10
+        });
+      }
     }
     const savedTheme = localStorage.getItem('STT_PREFERRED_THEME') || 'dark';
     const themeSelectEl = document.getElementById('themeSelect');
     if (themeSelectEl) {
       themeSelectEl.value = savedTheme;
-      changeTheme(savedTheme);
+      document.body.setAttribute('data-theme', savedTheme);
     }
 
     function saveToLocalBlackbox() {
@@ -841,6 +852,10 @@
       updateEndLinePosition();
 
       if (data.settings && amIMaster) {
+        if (data.settings.theme) {
+          document.body.setAttribute('data-theme', data.settings.theme);
+          if (themeSelectEl) themeSelectEl.value = data.settings.theme;
+        }
         if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
         if (data.settings.scale !== undefined) scaleInput.value = data.settings.scale;
         if (data.settings.pad_x !== undefined) padXInput.value = data.settings.pad_x;
@@ -933,7 +948,6 @@
       docVersion = data.version;
     });
 
-    // 🌟 接收遠端原子動作：絕對滾動鎖定，徹底杜絕暴跳 5 行
     socket.on('remote_operation', data => {
       if (!data || data.sender_sid === socket.id) return;
 
@@ -983,7 +997,6 @@
       committedText = editor.value;
       editor.setSelectionRange(curStart, curEnd);
 
-      // 強行固定唯一滾動軸高度，絕對不跳 5 行
       editor.scrollTop = savedScrollTop;
 
       updateWordCount();
@@ -1223,6 +1236,7 @@
       if (amIMaster) {
         socket.emit('update_settings', {
           room: roomId,
+          theme: document.body.getAttribute('data-theme') || 'dark',
           size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
           scale: parseInt(scaleInput.value, 10) || 100,
           pad_x: parseInt(padXInput.value, 10) || 8,
@@ -1233,7 +1247,7 @@
 
     socket.on('sync_settings', data => {
       if (data && !amIMaster) {
-        // 協作員端維持獨立視圖
+        // 協作員端維持個人獨立設定
       }
     });
     
