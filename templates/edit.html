@@ -286,7 +286,7 @@
       z-index: 50;
       display: none;
       transform-origin: top left;
-      transition: none;
+      transition: opacity 0.3s ease;
     }
     .remote-cursor-tag {
       position: absolute;
@@ -634,6 +634,13 @@
   </div>
 
   <script>
+    // 🌟 1. 本機唯一永久身分證（重連 1000 次也是同一個，絕不再無中生有多個游標！）
+    let myClientId = sessionStorage.getItem('STT_CLIENT_ID');
+    if (!myClientId) {
+      myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
+      sessionStorage.setItem('STT_CLIENT_ID', myClientId);
+    }
+
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     const roomId = "{{ room_id }}";
     let editor = document.getElementById('editor');
@@ -657,7 +664,7 @@
     const padYInput = document.getElementById('padYInput');
 
     let amIMaster = true;
-    let currentMasterSid = null;
+    let currentMasterClientId = null;
     let isComposing = false;
 
     let serverVersion = 0;
@@ -665,10 +672,21 @@
     let bufferOps = [];
     let committedText = "";
 
+    // 🌟 remoteCursors: Map<clientId, { index, element, tagElement, timer }>
     const remoteCursors = new Map();
     const audienceUrl = window.location.origin + '/view/' + roomId;
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
+
+    function clearAllRemoteCursors() {
+      remoteCursors.forEach(item => {
+        if (item.element && item.element.parentNode) {
+          item.element.parentNode.removeChild(item.element);
+        }
+      });
+      remoteCursors.clear();
+      remoteCursorsContainer.innerHTML = '';
+    }
 
     let isRenderScheduled = false;
     function scheduleUIRender() {
@@ -688,6 +706,7 @@
       if (amIMaster) {
         socket.emit('update_settings', {
           room: roomId,
+          client_id: myClientId,
           theme: themeName,
           size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
           scale: parseInt(scaleInput.value, 10) || 100,
@@ -739,6 +758,7 @@
             editor.setSelectionRange(clean.length, clean.length);
             socket.emit('client_operation', {
               room: roomId,
+              client_id: myClientId,
               base_version: serverVersion,
               ops: [{ type: 'insert', pos: 0, text: clean }]
             });
@@ -763,11 +783,13 @@
         committedText = '';
         inFlightOp = null;
         bufferOps = [];
+        clearAllRemoteCursors();
         editor.setSelectionRange(0, 0);
         try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {}
         
         socket.emit('client_operation', {
           room: roomId,
+          client_id: myClientId,
           base_version: serverVersion,
           is_clear: true
         });
@@ -824,11 +846,14 @@
     }
 
     socket.on('connect', () => { 
-      socket.emit('join', { room: roomId, is_editor: true }); 
+      clearAllRemoteCursors();
+      // 🌟 送出永久唯一的 myClientId
+      socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); 
     });
 
     socket.on('init_document', data => {
       if (!data) return;
+      clearAllRemoteCursors();
       const clean = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       editor.value = clean;
       committedText = clean;
@@ -852,15 +877,28 @@
       checkLocalBlackboxRestore(data.text);
     });
 
+    // 🌟 在線人員權威同步：非名單上的游標瞬間清洗
     socket.on('role_status_update', data => {
       const totalEditors = data.total_editors || 1;
       const totalViewers = data.total_viewers || 0;
+      const activeEditors = data.active_editors || [];
       
       viewerCountText.innerText = totalViewers;
-      currentMasterSid = data.master_sid;
-      amIMaster = (currentMasterSid === socket.id);
+      currentMasterClientId = data.master_client_id;
+      amIMaster = (currentMasterClientId === myClientId);
+
+      // 嚴格比對 client_id：只要不在名單或是我自己的舊游標，秒殺！
+      remoteCursors.forEach((item, cid) => {
+        if (!activeEditors.includes(cid) || cid === myClientId) {
+          if (item.element && item.element.parentNode) {
+            item.element.parentNode.removeChild(item.element);
+          }
+          remoteCursors.delete(cid);
+        }
+      });
 
       if (totalEditors <= 1) {
+        clearAllRemoteCursors();
         onlineDot.style.background = '#eab308';
         onlineCountText.innerHTML = `👤 僅您在線 (等待夥伴加入...)`;
       } else {
@@ -878,11 +916,12 @@
         modeHintText.innerText = "身分：【獨立協作視圖】字級比例各自獨立";
       }
       updateAllCursorTags();
+      scheduleUIRender();
     });
 
     function requestMasterRole() {
       if (amIMaster) return;
-      socket.emit('claim_master', { room: roomId });
+      socket.emit('claim_master', { room: roomId, client_id: myClientId });
     }
 
     function getAtomicOps(oldText, newText) {
@@ -926,6 +965,7 @@
           inFlightOp = op;
           socket.emit('client_operation', {
             room: roomId,
+            client_id: myClientId,
             base_version: serverVersion,
             ops: [op]
           });
@@ -949,6 +989,7 @@
         inFlightOp = { type: 'batch', count: opsToSend.length };
         socket.emit('client_operation', {
           room: roomId,
+          client_id: myClientId,
           base_version: serverVersion,
           ops: opsToSend
         });
@@ -993,7 +1034,7 @@
     }
 
     socket.on('remote_operation', data => {
-      if (!data || data.sender_sid === socket.id) return;
+      if (!data || data.client_id === myClientId) return;
 
       if (data.is_clear) {
         editor.value = '';
@@ -1071,11 +1112,13 @@
       editor.addEventListener('input', (e) => {
         if (e.isComposing || isComposing) return;
         handleLocalTyping();
+        broadcastCursorOnly();
       });
       
       editor.addEventListener('compositionend', () => {
         isComposing = false;
         handleLocalTyping();
+        broadcastCursorOnly();
       });
 
       editor.addEventListener('click', broadcastCursorOnly);
@@ -1093,32 +1136,41 @@
 
     let lastSentCursor = -1;
     function broadcastCursorOnly() {
-      if (isComposing) return;
       const pos = editor.selectionStart;
       if (pos !== lastSentCursor) {
         lastSentCursor = pos;
-        socket.emit('cursor_move', { room: roomId, cursor_index: pos });
+        // 🌟 攜帶唯一穩定的 myClientId
+        socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: pos });
       }
     }
 
+    // 🌟 收到游標移動：以 client_id 唯一更新，一人永遠只有一根游標！
     socket.on('cursor_update', data => {
-      if (!data || !data.sid || data.sid === socket.id) return;
-      updateRemoteCursor(data.sid, data.cursor_index);
+      if (!data || !data.client_id || data.client_id === myClientId) return;
+      updateRemoteCursor(data.client_id, data.cursor_index);
     });
 
     socket.on('cursor_remove', data => {
-      if (data && data.sid && remoteCursors.has(data.sid)) {
-        const item = remoteCursors.get(data.sid);
+      if (data && data.client_id && remoteCursors.has(data.client_id)) {
+        const item = remoteCursors.get(data.client_id);
         if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
-        remoteCursors.delete(data.sid);
+        remoteCursors.delete(data.client_id);
         scheduleUIRender();
       }
     });
 
-    function updateRemoteCursor(sid, cursorIndex) {
-      let item = remoteCursors.get(sid);
+    function updateRemoteCursor(cid, cursorIndex) {
+      // 🌟 雙人防線：全場只允許該 client_id 存在一個元件，清理其他重複
+      remoteCursors.forEach((item, oldCid) => {
+        if (oldCid !== cid) {
+          if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
+          remoteCursors.delete(oldCid);
+        }
+      });
+
+      let item = remoteCursors.get(cid);
       if (!item) {
-        const isTargetMaster = (sid === currentMasterSid);
+        const isTargetMaster = (cid === currentMasterClientId);
         const color = isTargetMaster ? '#16a34a' : '#0284c7';
         const label = isTargetMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
         const el = document.createElement('div');
@@ -1133,18 +1185,25 @@
 
         el.appendChild(tag);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag };
-        remoteCursors.set(sid, item);
+        item = { index: cursorIndex, element: el, tagElement: tag, fadeTimer: null };
+        remoteCursors.set(cid, item);
       } else {
         item.index = cursorIndex;
       }
+
+      // 游標活動時清晰可見，靜止 5 秒後淡化
+      item.element.style.opacity = '1';
+      clearTimeout(item.fadeTimer);
+      item.fadeTimer = setTimeout(() => {
+        if (item.element) item.element.style.opacity = '0.35';
+      }, 5000);
 
       scheduleUIRender();
     }
 
     function updateAllCursorTags() {
-      remoteCursors.forEach((item, sid) => {
-        const isTargetMaster = (sid === currentMasterSid);
+      remoteCursors.forEach((item, cid) => {
+        const isTargetMaster = (cid === currentMasterClientId);
         const color = isTargetMaster ? '#16a34a' : '#0284c7';
         const label = isTargetMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
         item.element.style.backgroundColor = color;
@@ -1154,9 +1213,8 @@
       });
     }
 
-    // 🌟 核心突破：前向字元矩形測量（徹底杜絕行末邊界被排版引擎擠到下一行！）
-    function renderSingleRemoteCursor(sid) {
-      const item = remoteCursors.get(sid);
+    function renderSingleRemoteCursor(cid) {
+      const item = remoteCursors.get(cid);
       if (!item || !editor) return;
 
       const el = item.element;
@@ -1189,7 +1247,6 @@
         return;
       }
 
-      // 抓取游標前方的「最後一個字」
       const preText = fullVal.substring(0, targetIndex - 1);
       const lastChar = fullVal.charAt(targetIndex - 1);
 
@@ -1203,14 +1260,12 @@
       let targetY = 0;
 
       if (lastChar === '\n') {
-        // 如果前一個字是換行符，游標自然在下一行開頭
         const lineProbe = document.createElement('span');
         lineProbe.textContent = ' ';
         mirrorDiv.appendChild(lineProbe);
         targetX = lineProbe.offsetLeft;
         targetY = lineProbe.offsetTop;
       } else {
-        // 🌟 核心防跳行：游標緊咬在前一個字的右邊框，永遠留在當前行，絕不掉到下一行！
         targetX = charSpan.offsetLeft + charSpan.offsetWidth;
         targetY = charSpan.offsetTop;
       }
@@ -1223,7 +1278,7 @@
     }
 
     function redrawAllRemoteCursors() {
-      for (const sid of remoteCursors.keys()) renderSingleRemoteCursor(sid);
+      for (const cid of remoteCursors.keys()) renderSingleRemoteCursor(cid);
     }
 
     window.addEventListener('resize', () => { 
@@ -1252,6 +1307,7 @@
       if (amIMaster) {
         socket.emit('update_settings', {
           room: roomId,
+          client_id: myClientId,
           theme: document.body.getAttribute('data-theme') || 'dark',
           size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
           scale: parseInt(scaleInput.value, 10) || 100,
