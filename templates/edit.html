@@ -263,7 +263,6 @@
       letter-spacing: 1px;
     }
 
-    /* 🌟 坐標鏡像盒：樣式必須與 #editor 達到 100% 絕對重合 */
     #mirrorDiv {
       position: absolute;
       top: 0;
@@ -810,11 +809,9 @@
       mirrorDiv.innerHTML = '';
       mirrorDiv.appendChild(document.createTextNode(editor.value || ''));
       
-      // 🌟 零寬度精確探針（絕不溢出邊界）
       const bottomProbe = document.createElement('span');
       bottomProbe.style.display = 'inline-block';
       bottomProbe.style.width = '0px';
-      bottomProbe.textContent = '';
       mirrorDiv.appendChild(bottomProbe);
 
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
@@ -1157,7 +1154,7 @@
       });
     }
 
-    // 🌟 徹底杜絕跳行的關鍵：使用「無字元 0 寬度 inline-block」錨點，保證永遠落在同一行！
+    // 🌟 核心突破：前向字元矩形測量（徹底杜絕行末邊界被排版引擎擠到下一行！）
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || !editor) return;
@@ -1189,27 +1186,40 @@
         el.style.height = fontHeight + 'px';
         el.style.zoom = scaleVal;
         el.style.display = 'block';
-      } else {
-        const preText = fullVal.substring(0, targetIndex);
-        mirrorDiv.appendChild(document.createTextNode(preText));
-        
-        // 🌟 0 寬度純標記，絕不佔據一絲一毫字符空間，不會被擠到下一行！
-        const anchor = document.createElement('span');
-        anchor.style.display = 'inline-block';
-        anchor.style.width = '0px';
-        anchor.style.height = fontHeight + 'px';
-        anchor.style.verticalAlign = 'bottom';
-        mirrorDiv.appendChild(anchor);
-
-        let targetX = anchor.offsetLeft;
-        let targetY = anchor.offsetTop;
-
-        el.style.left = targetX + 'px';
-        el.style.top = (targetY * scaleVal - editor.scrollTop) + 'px';
-        el.style.height = fontHeight + 'px';
-        el.style.zoom = scaleVal;
-        el.style.display = 'block';
+        return;
       }
+
+      // 抓取游標前方的「最後一個字」
+      const preText = fullVal.substring(0, targetIndex - 1);
+      const lastChar = fullVal.charAt(targetIndex - 1);
+
+      mirrorDiv.appendChild(document.createTextNode(preText));
+      
+      const charSpan = document.createElement('span');
+      charSpan.textContent = lastChar;
+      mirrorDiv.appendChild(charSpan);
+
+      let targetX = 0;
+      let targetY = 0;
+
+      if (lastChar === '\n') {
+        // 如果前一個字是換行符，游標自然在下一行開頭
+        const lineProbe = document.createElement('span');
+        lineProbe.textContent = ' ';
+        mirrorDiv.appendChild(lineProbe);
+        targetX = lineProbe.offsetLeft;
+        targetY = lineProbe.offsetTop;
+      } else {
+        // 🌟 核心防跳行：游標緊咬在前一個字的右邊框，永遠留在當前行，絕不掉到下一行！
+        targetX = charSpan.offsetLeft + charSpan.offsetWidth;
+        targetY = charSpan.offsetTop;
+      }
+
+      el.style.left = targetX + 'px';
+      el.style.top = (targetY * scaleVal - editor.scrollTop) + 'px';
+      el.style.height = fontHeight + 'px';
+      el.style.zoom = scaleVal;
+      el.style.display = 'block';
     }
 
     function redrawAllRemoteCursors() {
