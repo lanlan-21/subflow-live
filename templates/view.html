@@ -13,26 +13,26 @@
     body[data-theme="dark"] {
       --bg-main: #000000;
       --text-color: #ffff33;
-      --ghost-color: rgba(255, 255, 51, 0.75);
-      --ghost-underline: #ffff33;
+      --ghost-color: #ffff33;
+      --ghost-border: #ffff33;
     }
     body[data-theme="green"] {
       --bg-main: #c7edcc;
       --text-color: #111827;
-      --ghost-color: rgba(17, 24, 39, 0.7);
-      --ghost-underline: #047857;
+      --ghost-color: #065f46;
+      --ghost-border: #047857;
     }
     body[data-theme="navy"] {
       --bg-main: #0b132b;
       --text-color: #e0e1dd;
-      --ghost-color: rgba(224, 225, 221, 0.75);
-      --ghost-underline: #38bdf8;
+      --ghost-color: #38bdf8;
+      --ghost-border: #38bdf8;
     }
     body[data-theme="light"] {
       --bg-main: #ffffff;
       --text-color: #0f172a;
-      --ghost-color: rgba(15, 23, 42, 0.7);
-      --ghost-underline: #2563eb;
+      --ghost-color: #1d4ed8;
+      --ghost-border: #2563eb;
     }
 
     html, body {
@@ -49,31 +49,42 @@
       transition: background 0.25s ease, color 0.25s ease;
     }
 
+    /* 🌟 頂部感應熱區：碰頂才滑出工具列，平時 100% 乾淨不擋文字 */
+    #topHoverZone {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 20px;
+      z-index: 2500;
+    }
+
+    /* 🌟 碰頂隱藏式懸浮工具列 */
     .viewer-toolbar {
       position: fixed;
       top: 0;
       left: 0;
       width: 100%;
-      background: rgba(15, 23, 42, 0.92);
+      background: rgba(15, 23, 42, 0.95);
       border-bottom: 1px solid #334155;
       padding: 8px 16px;
       display: flex;
       align-items: center;
       gap: 12px;
-      z-index: 2000;
+      z-index: 3000;
       font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif;
       color: #e2e8f0;
       font-size: 13px;
       backdrop-filter: blur(8px);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.6);
-      transition: opacity 0.3s ease, transform 0.3s ease;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.7);
+      transform: translateY(-100%); /* 預設完全縮回頂部，絕不遮擋第一行文字 */
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .viewer-toolbar.dimmed {
-      opacity: 0.15;
-    }
-    .viewer-toolbar:hover {
-      opacity: 1 !important;
-      transform: translateY(0);
+    /* 滑鼠碰頂或進入工具列時滑下 */
+    #topHoverZone:hover + .viewer-toolbar,
+    .viewer-toolbar:hover,
+    .viewer-toolbar.forced-show {
+      transform: translateY(0) !important;
     }
 
     .control-group {
@@ -157,6 +168,33 @@
       box-shadow: 0 0 6px #22c55e;
     }
 
+    /* 🌟 右下角常駐極簡觸發按鈕（點擊即可展開/收起） */
+    #toggleToolBtn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid #475569;
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 16px;
+      z-index: 2100;
+      opacity: 0.35;
+      transition: opacity 0.2s, background 0.2s;
+    }
+    #toggleToolBtn:hover {
+      opacity: 1;
+      background: rgba(30, 41, 59, 0.95);
+      color: #38bdf8;
+    }
+
+    /* 🌟 大螢幕內文投影區：回歸自然內距（padding-top 僅 16px，無死角） */
     #displayArea {
       width: 100%;
       min-height: 100%;
@@ -169,31 +207,28 @@
       word-break: break-all;
       text-align: justify;
       transform-origin: top left;
-      padding: 60px 16px 140px 16px;
+      padding: 16px 16px 120px 16px; /* 徹底告別 60px/140px 的遮擋黑洞 */
     }
 
-    /* 🌟 即時敲字幽靈串流標籤（正在打的注音或字，帶有呼吸底線） */
+    /* 🌟 隨打隨現的即時組字幽靈標籤 */
     #liveGhostSpan {
       display: inline;
       color: var(--ghost-color);
-      border-bottom: 3px dashed var(--ghost-underline);
-      animation: ghostBlink 0.9s infinite alternate;
+      border-bottom: 3px dashed var(--ghost-border);
+      animation: ghostBlink 0.8s infinite alternate;
     }
     @keyframes ghostBlink {
-      from { opacity: 0.6; }
+      from { opacity: 0.65; }
       to { opacity: 1; }
-    }
-
-    body.is-fullscreen .viewer-toolbar {
-      transform: translateY(-90%);
-    }
-    body.is-fullscreen .viewer-toolbar:hover {
-      transform: translateY(0);
     }
   </style>
 </head>
 <body data-theme="dark">
 
+  <!-- 頂部 20px 感應熱區 -->
+  <div id="topHoverZone"></div>
+
+  <!-- 碰頂滑下的工具列 -->
   <div class="viewer-toolbar" id="viewerToolbar">
     <div class="control-group">
       <label for="scaleInput">觀看比例：</label>
@@ -210,6 +245,10 @@
       ⛶ 全螢幕
     </button>
 
+    <button class="btn" onclick="hideToolbarNow()">
+      ▲ 收起面板
+    </button>
+
     <div class="status-pill">
       <span class="status-dot"></span>
       <span>頻道 {{ room_id }} 投影</span>
@@ -217,6 +256,9 @@
   </div>
 
   <div id="displayArea"><span id="solidText"></span><span id="liveGhostSpan" style="display: none;"></span></div>
+
+  <!-- 右下角浮動呼叫鈕 -->
+  <div id="toggleToolBtn" onclick="manualToggleToolbar()" title="展開/收起工具列">⚙️</div>
 
   <script>
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
@@ -231,17 +273,23 @@
     let isAutoScrolling = true;
     let hasUserCustomScale = false;
     let masterSettings = null;
-    let toolbarTimer = null;
+    let autoHideTimer = null;
 
-    function resetToolbarDim() {
-      viewerToolbar.classList.remove('dimmed');
-      clearTimeout(toolbarTimer);
-      toolbarTimer = setTimeout(() => {
-        viewerToolbar.classList.add('dimmed');
-      }, 4000);
+    // 🌟 工具列手動切換控制
+    function manualToggleToolbar() {
+      viewerToolbar.classList.toggle('forced-show');
     }
-    window.addEventListener('mousemove', resetToolbarDim);
-    resetToolbarDim();
+    function hideToolbarNow() {
+      viewerToolbar.classList.remove('forced-show');
+    }
+
+    // 碰頂滑下後，滑鼠離開 2 秒自動收起
+    viewerToolbar.addEventListener('mouseleave', () => {
+      clearTimeout(autoHideTimer);
+      autoHideTimer = setTimeout(() => {
+        viewerToolbar.classList.remove('forced-show');
+      }, 2000);
+    });
 
     function stepScale(delta) {
       let currentVal = parseInt(scaleInput.value, 10) || 100;
@@ -304,9 +352,6 @@
         document.exitFullscreen();
       }
     }
-    document.addEventListener('fullscreenchange', () => {
-      document.body.classList.toggle('is-fullscreen', !!document.fullscreenElement);
-    });
 
     socket.on('connect', () => {
       socket.emit('join', { room: roomId, is_editor: false });
@@ -324,7 +369,7 @@
       setTimeout(scrollToBottom, 60);
     });
 
-    // 🌟 核心：接收即時注音/組字串流（未按 Enter 也能立刻在大螢幕末端跳動！）
+    // 🌟 隨打隨現：聽打員正在按注音或選字時，大螢幕 0 毫秒同步呈現！
     socket.on('audience_live_composing', data => {
       if (!data) return;
       const compText = data.composing_text || '';
@@ -338,7 +383,7 @@
       if (isAutoScrolling) scrollToBottom();
     });
 
-    // 🌟 收到確認定稿動作：幽靈字清空，固化正式內文
+    // 🌟 定稿動作：清空臨時注音，將定稿字元固化
     socket.on('remote_operation', data => {
       if (!data) return;
 
@@ -401,7 +446,7 @@
 
       const px = (settings.pad_x !== undefined ? settings.pad_x : 16) + 'px';
       const py = (settings.pad_y !== undefined ? settings.pad_y : 16) + 'px';
-      displayArea.style.padding = `${py} ${px} 140px ${px}`;
+      displayArea.style.padding = `${py} ${px} 120px ${px}`;
 
       if (isAutoScrolling) scrollToBottom();
     }
