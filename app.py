@@ -47,7 +47,6 @@ def transform_primitive(op1, op2, priority):
 
     if t1 == 'insert' and t2 == 'insert':
         l2 = len(op2['text'])
-        # 若在相同位置同時插入，以優先權判定誰在左邊、誰被推往右邊
         if p1 < p2 or (p1 == p2 and priority == 'left'):
             return {'type': 'insert', 'pos': p1, 'text': op1['text']}
         else:
@@ -189,21 +188,18 @@ def handle_client_operation(data):
         emit('ack_operation', {'version': rdata["version"]}, to=sid)
         return
 
-    # 換行正規化
     ops = []
     for op in raw_ops:
         if op.get('type') == 'insert':
             op['text'] = op['text'].replace('\r\n', '\n').replace('\r', '\n')
         ops.append(op)
 
-    # 針對伺服器自 base_version 以來的所有歷史記錄，進行坐標線性推進
     transformed_ops = []
     for op in ops:
         curr = dict(op)
         for hist in rdata["history"]:
             if hist['version'] > base_version:
                 if hist['op'].get('type') != 'clear':
-                    # 後到達伺服器的操作優先權給 right（讓先到者佔據左側，後到者向右推移）
                     curr = transform_primitive(curr, hist['op'], priority='right')
                     if curr is None:
                         break
@@ -216,16 +212,26 @@ def handle_client_operation(data):
     if len(rdata["history"]) > 600:
         rdata["history"] = rdata["history"][-600:]
 
-    # 先回應發送方 ACK（解鎖發送方的飛行狀態）
     emit('ack_operation', {'version': rdata["version"]}, to=sid)
 
-    # 廣播給其他協作人員與大螢幕
     if transformed_ops:
         emit('remote_operation', {
             'version': rdata["version"],
             'ops': transformed_ops,
             'full_text': rdata["text"],
             'sender_sid': sid
+        }, to=room_id, include_self=False)
+
+
+# 🌟 即時組字幽靈串流：將正在按的注音或暫存字毫秒級廣播給大螢幕與協作端
+@socketio.on('live_composing')
+def handle_live_composing(data):
+    room_id = data.get('room')
+    sid = request.sid
+    if room_id in rooms:
+        emit('audience_live_composing', {
+            'sid': sid,
+            'composing_text': data.get('composing_text', '')
         }, to=room_id, include_self=False)
 
 
