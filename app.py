@@ -38,7 +38,7 @@ def cancel_room_cleanup(room_id):
         timer.cancel()
 
 
-# 🌟 Google Docs 級原子轉換：嚴格保證字元自動向後推，絕不重疊覆蓋
+# 🌟 Google Docs 級原子轉換
 def transform_primitive(op1, op2, priority):
     if not op1 or not op2:
         return op1
@@ -223,7 +223,20 @@ def handle_client_operation(data):
         }, to=room_id, include_self=False)
 
 
-# 🌟 即時組字幽靈串流：將正在按的注音或暫存字毫秒級廣播給大螢幕與協作端
+# 🌟 即時未定稿敲鍵串流（包含注音、改字、行內補字即時廣播）
+@socketio.on('cursor_move')
+def handle_cursor_move(data):
+    room_id = data.get('room')
+    sid = request.sid
+    if room_id in rooms:
+        emit('cursor_update', {
+            'sid': sid,
+            'cursor_index': data.get('cursor_index', 0),
+            'typing_text': data.get('typing_text', '')
+        }, to=room_id, include_self=False)
+
+
+# 🌟 觀眾大螢幕即時組字
 @socketio.on('live_composing')
 def handle_live_composing(data):
     room_id = data.get('room')
@@ -231,6 +244,7 @@ def handle_live_composing(data):
     if room_id in rooms:
         emit('audience_live_composing', {
             'sid': sid,
+            'base_text': rooms[room_id]["text"],
             'composing_text': data.get('composing_text', '')
         }, to=room_id, include_self=False)
 
@@ -255,18 +269,6 @@ def handle_claim_master(data):
     if room_id in rooms and sid in rooms[room_id]["editors"]:
         rooms[room_id]["master_sid"] = sid
         broadcast_roles_status(room_id)
-
-
-@socketio.on('cursor_move')
-def handle_cursor_move(data):
-    room_id = data.get('room')
-    sid = request.sid
-    if room_id in rooms:
-        emit('cursor_update', {
-            'sid': sid,
-            'cursor_index': data.get('cursor_index', 0),
-            'typing_text': data.get('typing_text', '')
-        }, to=room_id, include_self=False)
 
 
 @socketio.on('disconnect')
