@@ -140,14 +140,13 @@ def handle_join(data):
             "history": [],
             "settings": {"theme": "dark", "size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
             "master_client_id": None,
-            "editors": {},  # { client_id: sid } 唯一對應！
+            "editors": {},
             "viewers": set()
         }
 
     join_room(room_id)
 
     if is_editor:
-        # 🌟 唯一身分覆寫：同一台電腦重連只會更新 sid，絕對不增加新使用者
         rooms[room_id]["editors"][client_id] = sid
         if rooms[room_id]["master_client_id"] is None:
             rooms[room_id]["master_client_id"] = client_id
@@ -225,7 +224,21 @@ def handle_client_operation(data):
         }, to=room_id, include_self=False)
 
 
-# 🌟 游標移動：以唯一的 client_id 廣播，一人永遠只有一根游標
+# 🌟 核心即時注音串流：打注音尚未按 Enter 時，立即同步廣播位置與字元
+@socketio.on('live_composing_stream')
+def handle_live_composing_stream(data):
+    room_id = data.get('room')
+    client_id = data.get('client_id')
+    if not client_id or not room_id or room_id not in rooms:
+        return
+
+    emit('remote_composing_stream', {
+        'client_id': client_id,
+        'cursor_index': data.get('cursor_index', 0),
+        'composing_text': data.get('composing_text', '')
+    }, to=room_id, include_self=False)
+
+
 @socketio.on('cursor_move')
 def handle_cursor_move(data):
     room_id = data.get('room')
@@ -267,7 +280,6 @@ def handle_disconnect():
     for room_id, rdata in list(rooms.items()):
         modified = False
 
-        # 找尋斷線的 client_id
         disconnected_cid = None
         for cid, csid in list(rdata["editors"].items()):
             if csid == sid:
@@ -277,7 +289,6 @@ def handle_disconnect():
         if disconnected_cid:
             rdata["editors"].pop(disconnected_cid, None)
             modified = True
-            # 立即廣播拔除該使用者的游標
             emit('cursor_remove', {'client_id': disconnected_cid}, to=room_id)
 
             if rdata["master_client_id"] == disconnected_cid:
