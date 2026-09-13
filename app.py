@@ -10,19 +10,11 @@ app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 記憶體資料結構
-# rooms[room_id] = {
-#     "text": "",
-#     "version": 0,
-#     "settings": {"size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
-#     "master_sid": None,
-#     "editors": set(),
-#     "viewers": set()
-# }
+# 記憶體文件狀態與歷史版本記錄
 rooms = {}
 
 cleanup_timers = {}
-CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘全員離線自動銷毀
+CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘無人連線自動清理釋放 RAM
 
 
 def schedule_room_cleanup(room_id):
@@ -32,7 +24,7 @@ def schedule_room_cleanup(room_id):
         if room_id in rooms:
             total_connected = len(rooms[room_id].get("editors", set())) + len(rooms[room_id].get("viewers", set()))
             if total_connected == 0:
-                print(f"[自動清理] 房間 {room_id} 閒置達 30 分鐘，清空記憶體。")
+                print(f"[自動清理] 房間 {room_id} 閒置達 30 分鐘，釋放記憶體。")
                 rooms.pop(room_id, None)
         cleanup_timers.pop(room_id, None)
 
@@ -46,6 +38,72 @@ def cancel_room_cleanup(room_id):
     timer = cleanup_timers.pop(room_id, None)
     if timer:
         timer.cancel()
+
+
+# 🌟 Google Docs 級 OT 坐標轉換：同秒打字或換行時各自平移保留，絕不疊字吃字
+def transform_op(op, against):
+    t_type = op['type']
+    a_type = against['type']
+
+    if t_type == 'insert' and a_type == 'insert':
+        pos = op['pos']
+        if against['pos'] <= pos:
+            return {'type': 'insert', 'pos': pos + len(against['text']), 'text': op['text']}
+        return op
+
+    elif t_type == 'insert' and a_type == 'delete':
+        pos = op['pos']
+        del_pos = against['pos']
+        del_len = against['len']
+        if pos <= del_pos:
+            return op
+        elif pos >= del_pos + del_len:
+            return {'type': 'insert', 'pos': pos - del_len, 'text': op['text']}
+        else:
+            return {'type': 'insert', 'pos': del_pos, 'text': op['text']}
+
+    elif t_type == 'delete' and a_type == 'insert':
+        pos = op['pos']
+        del_len = op['len']
+        ins_pos = against['pos']
+        ins_len = len(against['text'])
+        if pos >= ins_pos:
+            return {'type': 'delete', 'pos': pos + ins_len, 'len': del_len}
+        elif pos + del_len <= ins_pos:
+            return op
+        else:
+            return {'type': 'delete', 'pos': pos, 'len': del_len + ins_len}
+
+    elif t_type == 'delete' and a_type == 'delete':
+        pos1, len1 = op['pos'], op['len']
+        pos2, len2 = against['pos'], against['len']
+        if pos1 + len1 <= pos2:
+            return op
+        elif pos1 >= pos2 + len2:
+            return {'type': 'delete', 'pos': pos1 - len2, 'len': len1}
+        else:
+            overlap_start = max(pos1, pos2)
+            overlap_end = min(pos1 + len1, pos2 + len2)
+            overlap_len = max(0, overlap_end - overlap_start)
+            new_len = len1 - overlap_len
+            new_pos = min(pos1, pos2)
+            if new_len <= 0:
+                return None
+            return {'type': 'delete', 'pos': new_pos, 'len': new_len}
+    return op
+
+
+def apply_op_to_text(text, op):
+    if not op:
+        return text
+    if op['type'] == 'insert':
+        p = min(max(0, op['pos']), len(text))
+        return text[:p] + op['text'] + text[p:]
+    elif op['type'] == 'delete':
+        p = min(max(0, op['pos']), len(text))
+        l = op['len']
+        return text[:p] + text[p+l:]
+    return text
 
 
 @app.route('/')
@@ -74,7 +132,6 @@ def handle_join(data):
     room_id = data.get('room')
     is_editor = data.get('is_editor', False)
     sid = request.sid
-
     if not room_id:
         return
 
@@ -84,6 +141,7 @@ def handle_join(data):
         rooms[room_id] = {
             "text": "",
             "version": 0,
+            "history": [],
             "settings": {"size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
             "master_sid": None,
             "editors": set(),
@@ -108,32 +166,76 @@ def handle_join(data):
     broadcast_roles_status(room_id)
 
 
-@socketio.on('sync_text')
-def handle_sync_text(data):
+@socketio.on('client_operation')
+def handle_client_operation(data):
     room_id = data.get('room')
     sid = request.sid
-
     if not room_id or room_id not in rooms:
         return
 
     cancel_room_cleanup(room_id)
+    rdata = rooms[room_id]
 
-    rooms[room_id]["version"] += 1
-    new_text = data.get('text', '')
-    rooms[room_id]["text"] = new_text
+    base_version = data.get('base_version', 0)
+    raw_ops = data.get('ops', [])
 
-    is_master = (sid == rooms[room_id].get("master_sid"))
-    if is_master:
+    if data.get('is_clear'):
+        rdata["text"] = ""
+        rdata["version"] += 1
+        rdata["history"].append({'version': rdata["version"], 'op': {'type': 'clear'}})
+        emit('remote_operation', {
+            'version': rdata["version"],
+            'is_clear': True,
+            'sender_sid': sid
+        }, to=room_id, include_self=False)
+        emit('ack_operation', {'version': rdata["version"]}, to=sid)
+        return
+
+    # 換行字元統一正規化為單一字元 \n，跨系統長度絕對精確
+    ops = []
+    for op in raw_ops:
+        if op.get('type') == 'insert':
+            op['text'] = op['text'].replace('\r\n', '\n').replace('\r', '\n')
+        ops.append(op)
+
+    transformed_ops = []
+    for op in ops:
+        current_op = dict(op)
+        for hist in rdata["history"]:
+            if hist['version'] > base_version:
+                if hist['op'].get('type') != 'clear':
+                    current_op = transform_op(current_op, hist['op'])
+                    if current_op is None:
+                        break
+        if current_op:
+            transformed_ops.append(current_op)
+            rdata["text"] = apply_op_to_text(rdata["text"], current_op)
+            rdata["version"] += 1
+            rdata["history"].append({'version': rdata["version"], 'op': current_op})
+
+    if len(rdata["history"]) > 500:
+        rdata["history"] = rdata["history"][-500:]
+
+    emit('ack_operation', {'version': rdata["version"]}, to=sid)
+
+    if transformed_ops:
+        emit('remote_operation', {
+            'version': rdata["version"],
+            'ops': transformed_ops,
+            'sender_sid': sid
+        }, to=room_id, include_self=False)
+
+
+@socketio.on('update_settings')
+def handle_update_settings(data):
+    room_id = data.get('room')
+    sid = request.sid
+    if room_id in rooms and sid == rooms[room_id].get("master_sid"):
         rooms[room_id]["settings"]["size"] = data.get('size', 48)
         rooms[room_id]["settings"]["scale"] = data.get('scale', 100)
         rooms[room_id]["settings"]["pad_x"] = data.get('pad_x', 8)
         rooms[room_id]["settings"]["pad_y"] = data.get('pad_y', 10)
-
-    data['version'] = rooms[room_id]["version"]
-    data['sender_sid'] = sid
-    data['is_master'] = is_master
-
-    emit('sync_text', data, to=room_id, include_self=False)
+        emit('sync_settings', rooms[room_id]["settings"], to=room_id, include_self=False)
 
 
 @socketio.on('claim_master')
@@ -150,7 +252,6 @@ def handle_cursor_move(data):
     room_id = data.get('room')
     sid = request.sid
     if room_id in rooms:
-        # 🌟 確保轉發正在輸入的字詞給搭檔
         emit('cursor_update', {
             'sid': sid,
             'cursor_index': data.get('cursor_index', 0),
