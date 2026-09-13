@@ -15,13 +15,14 @@
       height: 100%;
       background: #000000;
       color: #ffff33;
-      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
+      /* 🌟 強制全域鎖定標準標楷體 */
+      font-family: "DFKai-SB", "BiauKai", "標楷體", serif !important;
       overflow-x: hidden;
       overflow-y: auto;
       scroll-behavior: smooth;
     }
 
-    /* 頂部極簡控制列（4 秒無動作自動半透明） */
+    /* 頂部極簡控制列（字型維持介面黑體，不影響內文投影） */
     .viewer-toolbar {
       position: fixed;
       top: 0;
@@ -93,7 +94,6 @@
     }
     .btn:hover { background: #334155; }
     
-    /* 模式按鈕狀態外觀 */
     .btn-following {
       background: #15803d;
       border-color: #22c55e;
@@ -131,12 +131,15 @@
       box-shadow: 0 0 6px #22c55e;
     }
 
+    /* 🌟 大螢幕內文投影區：絕對強制標準標楷體 */
     #displayArea {
       width: 100%;
       min-height: 100%;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", serif !important;
       font-size: 48px;
       line-height: 1.25;
       letter-spacing: 0px;
+      color: #ffff33;
       white-space: pre-wrap;
       word-break: break-all;
       text-align: justify;
@@ -220,7 +223,6 @@
         displayArea.style.transform = `scale(${scaleVal})`;
         displayArea.style.width = `${100 / scaleVal}%`;
       }
-      // 縮放完成後，若原本就在跟隨狀態，平滑對齊底部
       if (isAutoScrolling) {
         scrollToBottom();
       }
@@ -315,7 +317,6 @@
       }
 
       displayArea.innerText = text;
-      // 只要沒有往上滑看舊字，新字一到立刻平滑跟隨滾動
       if (isAutoScrolling) {
         scrollToBottom();
       }
@@ -334,7 +335,6 @@
         displayArea.style.fontSize = settings.size + 'px';
       }
 
-      // 若觀眾尚未手動微調過，則完全依據主控端縮放比例
       if (!hasUserCustomScale && settings.scale !== undefined) {
         scaleInput.value = settings.scale;
         const scaleVal = settings.scale / 100;
