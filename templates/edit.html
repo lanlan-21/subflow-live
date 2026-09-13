@@ -4,12 +4,10 @@
   <meta charset="UTF-8">
   <title>聽打工作台 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/diff_match_patch/20121119/diff_match_patch.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     
-    /* 🌟 主題色系：淡綠護眼配深黑字 */
     body[data-theme="dark"] {
       --bg-main: #0a0a0a;
       --bg-editor: #121212;
@@ -19,10 +17,10 @@
       --ghost-color: #38bdf8;
     }
     body[data-theme="green"] {
-      --bg-main: #c7edcc;
-      --bg-editor: #d2edd2;
-      --text-color: #111827;
-      --caret-color: #047857;
+      --bg-main: #c7edcc;      /* 經典護眼豆沙綠外底 */
+      --bg-editor: #d2edd2;    /* 柔和護眼內底 */
+      --text-color: #111827;   /* 高對比炭黑字 */
+      --caret-color: #047857;  /* 墨綠色游標 */
       --ghost-bg: rgba(4, 120, 87, 0.2);
       --ghost-color: #065f46;
     }
@@ -203,6 +201,7 @@
       transition: width 0.04s ease-out;
     }
 
+    /* 🌟 核心防跳行架構：統一由 editor 捲動，外層容器嚴格鎖死 overflow: hidden */
     .editor-wrapper {
       flex: 1;
       display: flex;
@@ -217,17 +216,16 @@
       flex: 1;
       width: 100%;
       height: 100%;
-      overflow-y: scroll;
-      overflow-x: hidden;
+      overflow: hidden !important; /* 🌟 徹底廢除外層滾動軸 */
     }
 
     #editor {
       width: 100%;
-      min-height: 100%;
+      height: 100%;
       border: none;
       outline: none;
       resize: none;
-      padding: 16px 8px 300px 8px;
+      padding: 16px 8px 60px 8px; /* 正常內距，拿掉 350px 誘發滾動跳行的問題 */
       font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
       font-size: 48px;
       line-height: 1.15;
@@ -239,10 +237,13 @@
       word-break: break-all;
       text-align: justify;
       transform-origin: top left;
-      overflow: hidden;
       display: block;
       position: relative;
       z-index: 10;
+      box-sizing: border-box;
+      overflow-y: auto !important; /* 🌟 唯一合法的原生滾動權限 */
+      overflow-x: hidden !important;
+      overflow-anchor: none !important;
     }
 
     #endLineMarker {
@@ -284,7 +285,6 @@
       box-sizing: border-box;
     }
 
-    /* 🌟 Google Docs 級彩色游標與原地 1:1 大字即時注音流 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -292,7 +292,7 @@
       z-index: 50;
       display: none;
       transform-origin: top left;
-      transition: left 0.05s ease-out, top 0.05s ease-out;
+      transition: none;
     }
     .remote-cursor-tag {
       position: absolute;
@@ -309,7 +309,6 @@
       z-index: 60;
     }
 
-    /* 🌟 1:1 等大、原地排版、Google Docs 式注音暫存字 */
     .remote-inline-ghost {
       position: absolute;
       left: 3px;
@@ -540,7 +539,7 @@
       🎙️ 語音辨識
     </button>
 
-    <!-- 🌟 最前排：底色切換 -->
+    <!-- 🌟 底色切換 -->
     <div class="control-group" style="background: #27272a; padding: 3px 8px; border-radius: 6px; border: 1px solid #38bdf8;">
       <label for="themeSelect" style="font-weight: bold; color: #38bdf8;">🎨 編輯區底色：</label>
       <select id="themeSelect" onchange="changeTheme(this.value)" style="font-weight: bold; cursor: pointer; color: #fff;">
@@ -690,22 +689,19 @@
     let amIMaster = true;
     let currentMasterSid = null;
     let isComposing = false;
-    let isApplyingRemote = false;
 
+    let docVersion = 0;
+    let committedText = "";
     const pendingRemoteQueue = [];
-    const remoteCursors = new Map();
-    const dmp = new diff_match_patch();
-    let shadowText = "";
-    const audienceUrl = window.location.origin + '/view/' + roomId;
 
+    const remoteCursors = new Map();
+    const audienceUrl = window.location.origin + '/view/' + roomId;
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
 
     function changeTheme(themeName) {
       document.body.setAttribute('data-theme', themeName);
-      try {
-        localStorage.setItem('STT_PREFERRED_THEME', themeName);
-      } catch(e) {}
+      try { localStorage.setItem('STT_PREFERRED_THEME', themeName); } catch(e) {}
     }
     const savedTheme = localStorage.getItem('STT_PREFERRED_THEME') || 'dark';
     const themeSelectEl = document.getElementById('themeSelect');
@@ -744,12 +740,16 @@
           const restoreConfirm = confirm(`💡【災難還原提醒】\n\n檢測到您本機留有剛才未匯出的打字記錄：\n- 儲存時間：約 ${formattedTime}\n- 內容長度：${localLen} 字\n\n請問是否一鍵還原到畫布並同步？\n【確定】：立刻還原\n【取消】：捨棄舊記錄使用新畫布`);
           
           if (restoreConfirm) {
-            editor.value = savedData.text;
-            shadowText = savedData.text;
-            editor.setSelectionRange(savedData.text.length, savedData.text.length);
-            sendRealtimeSync();
+            const clean = savedData.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            editor.value = clean;
+            committedText = clean;
+            editor.setSelectionRange(clean.length, clean.length);
+            socket.emit('client_operation', {
+              room: roomId,
+              base_version: docVersion,
+              ops: [{ type: 'insert', pos: 0, text: clean }]
+            });
             updateWordCount();
-            autoGrowTextarea();
             updateEndLinePosition();
           }
         }
@@ -767,21 +767,17 @@
       
       if (confirm(warningMsg)) {
         editor.value = '';
+        committedText = '';
         editor.setSelectionRange(0, 0);
-        shadowText = "";
         try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {}
         
-        socket.emit('sync_text', {
+        socket.emit('client_operation', {
           room: roomId,
-          text: '',
-          clean_text: '',
-          patch: '',
-          cursor_index: 0,
+          base_version: docVersion,
           is_clear: true
         });
 
         updateWordCount();
-        autoGrowTextarea();
         updateEndLinePosition();
         editor.focus();
       }
@@ -795,47 +791,10 @@
           e.preventDefault();
           e.returnValue = msg;
         }
-        scheduleImeDeepRebuild();
         return msg;
       }
     }
     window.onbeforeunload = handleBeforeUnload;
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
-    function rebuildEditorNode() {
-      if (!editor || !editor.parentNode) return;
-      const curStart = editor.selectionStart;
-      const curEnd = editor.selectionEnd;
-      const textVal = editor.value;
-
-      const newEditor = editor.cloneNode(false);
-      newEditor.value = textVal;
-
-      editor.parentNode.replaceChild(newEditor, editor);
-      editor = newEditor;
-
-      bindEditorEvents();
-      applyLocalStyle();
-      editor.focus();
-      editor.setSelectionRange(curStart, curEnd);
-      updateEndLinePosition();
-    }
-
-    function scheduleImeDeepRebuild() {
-      setTimeout(rebuildEditorNode, 150);
-      setTimeout(rebuildEditorNode, 400);
-    }
-
-    window.addEventListener('focus', () => {
-      if (editor) editor.focus();
-    });
-
-    function autoGrowTextarea() {
-      const minHeight = editorContainer.clientHeight + 200;
-      if (editor.scrollHeight > editor.clientHeight || editor.clientHeight < minHeight) {
-        editor.style.height = Math.max(editor.scrollHeight, minHeight) + 'px';
-      }
-    }
 
     function updateEndLinePosition() {
       if (!editor) return;
@@ -861,7 +820,7 @@
 
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       const fontHeight = parseFloat(cs.fontSize) || 48;
-      const bottomY = (bottomProbe.offsetTop + fontHeight) * scaleVal;
+      const bottomY = (bottomProbe.offsetTop + fontHeight) * scaleVal - editor.scrollTop;
 
       endLineMarker.style.top = bottomY + 'px';
       endLineMarker.style.left = (parseFloat(cs.paddingLeft) || 8) + 'px';
@@ -874,11 +833,11 @@
 
     socket.on('init_document', data => {
       if (!data) return;
-      isApplyingRemote = true;
-      editor.value = data.text || '';
-      shadowText = editor.value;
+      const clean = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      editor.value = clean;
+      committedText = clean;
+      docVersion = data.version || 0;
       updateWordCount();
-      autoGrowTextarea();
       updateEndLinePosition();
 
       if (data.settings && amIMaster) {
@@ -888,7 +847,6 @@
         if (data.settings.pad_y !== undefined) padYInput.value = data.settings.pad_y;
         applyLocalStyle();
       }
-      isApplyingRemote = false;
       checkLocalBlackboxRestore(data.text);
     });
 
@@ -925,168 +883,175 @@
       socket.emit('claim_master', { room: roomId });
     }
 
-    // 🌟 核心：監聽注音輸入法，以極高頻率廣播未定稿字詞
-    function bindEditorEvents() {
-      editor.addEventListener('compositionstart', () => { 
-        isComposing = true; 
-      });
+    function getAtomicOps(oldText, newText) {
+      if (oldText === newText) return [];
+      let prefix = 0;
+      const maxPrefix = Math.min(oldText.length, newText.length);
+      while (prefix < maxPrefix && oldText[prefix] === newText[prefix]) {
+        prefix++;
+      }
+      let suffix = 0;
+      const maxSuffix = Math.min(oldText.length - prefix, newText.length - prefix);
+      while (suffix < maxSuffix && oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]) {
+        suffix++;
+      }
+      const delLen = oldText.length - prefix - suffix;
+      const insText = newText.substring(prefix, newText.length - suffix);
 
-      editor.addEventListener('compositionupdate', (e) => {
-        socket.emit('cursor_move', {
-          room: roomId,
-          cursor_index: editor.selectionStart,
-          typing_text: e.data || ''
-        });
-      });
-      
-      editor.addEventListener('compositionend', () => {
-        isComposing = false;
-        // 定稿完成，清空搭檔畫面上的暫存幽靈字
-        socket.emit('cursor_move', {
-          room: roomId,
-          cursor_index: editor.selectionStart,
-          typing_text: ''
-        });
-        sendRealtimeSync();
-        saveToLocalBlackbox();
-        flushPendingQueue();
-      });
-
-      editor.addEventListener('input', () => {
-        if (!isApplyingRemote && !isComposing) {
-          sendRealtimeSync();
-          saveToLocalBlackbox();
-        }
-      });
-
-      editor.addEventListener('click', broadcastCursorOnly);
-      editor.addEventListener('keyup', (e) => {
-        if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)) {
-          broadcastCursorOnly();
-        }
-      });
+      const ops = [];
+      if (delLen > 0) {
+        ops.push({ type: 'delete', pos: prefix, len: delLen });
+      }
+      if (insText.length > 0) {
+        ops.push({ type: 'insert', pos: prefix, text: insText });
+      }
+      return ops;
     }
-    bindEditorEvents();
 
-    function sendRealtimeSync() {
-      const currentText = editor.value;
-      if (currentText === shadowText) return;
+    function emitLocalChanges() {
+      const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      if (editor.value !== currentText) {
+        editor.value = currentText;
+      }
+      if (currentText === committedText) return;
 
-      const patchList = dmp.patch_make(shadowText, currentText);
-      const patchText = dmp.patch_toText(patchList);
-      shadowText = currentText;
-
-      const myCursor = editor.selectionStart;
-
-      socket.emit('sync_text', {
-        room: roomId,
-        text: currentText,
-        clean_text: currentText.trimEnd(),
-        patch: patchText,
-        cursor_index: myCursor,
-        size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
-        scale: parseInt(scaleInput.value, 10) || 100,
-        pad_x: parseInt(padXInput.value, 10) || 8,
-        pad_y: parseInt(padYInput.value, 10) || 10
-      });
-
+      const ops = getAtomicOps(committedText, currentText);
+      if (ops.length > 0) {
+        socket.emit('client_operation', {
+          room: roomId,
+          base_version: docVersion,
+          ops: ops
+        });
+        committedText = currentText;
+      }
       updateWordCount();
       updateEndLinePosition();
-      autoGrowTextarea();
+      saveToLocalBlackbox();
     }
 
-    function flushPendingQueue() {
-      while (pendingRemoteQueue.length > 0) {
-        const item = pendingRemoteQueue.shift();
-        applySingleRemoteDelta(item);
-      }
-    }
+    socket.on('ack_operation', data => {
+      docVersion = data.version;
+    });
 
-    socket.on('sync_text', data => {
+    // 🌟 核心防跳行注入：0 毫秒滾動鎖定，絕對不跳 5 行
+    socket.on('remote_operation', data => {
       if (!data || data.sender_sid === socket.id) return;
 
       if (data.is_clear) {
         editor.value = '';
-        shadowText = '';
+        committedText = '';
+        docVersion = data.version;
         updateWordCount();
         updateEndLinePosition();
-        autoGrowTextarea();
         return;
       }
 
       if (isComposing) {
         pendingRemoteQueue.push(data);
-        if (data.cursor_index !== undefined) {
-          updateRemoteCursor(data.sender_sid, data.cursor_index, '');
-        }
         return;
       }
 
-      applySingleRemoteDelta(data);
+      applyRemoteOps(data);
     });
 
-    function applySingleRemoteDelta(data) {
-      if (typeof data.text !== 'string') return;
+    function applyRemoteOps(data) {
+      docVersion = data.version;
+      const ops = data.ops || [];
 
-      const curStart = editor.selectionStart;
-      const oldText = editor.value;
+      let curStart = editor.selectionStart;
+      let curEnd = editor.selectionEnd;
 
-      if (oldText === data.text) {
-        if (data.cursor_index !== undefined) {
-          updateRemoteCursor(data.sender_sid, data.cursor_index, '');
-        }
-        return;
-      }
+      const savedScrollTop = editor.scrollTop;
 
-      isApplyingRemote = true;
-      let applied = false;
+      for (const op of ops) {
+        if (op.type === 'insert') {
+          const insertText = op.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+          const p = Math.min(op.pos, editor.value.length);
+          editor.setRangeText(insertText, p, p, 'preserve');
+          if (p <= curStart) curStart += insertText.length;
+          if (p < curEnd) curEnd += insertText.length;
 
-      if (data.patch && data.patch.trim().length > 0) {
-        try {
-          const patches = dmp.patch_fromText(data.patch);
-
-          let offset = 0;
-          for (const p of patches) {
-            if (p.start1 <= curStart) {
-              offset += (p.length2 - p.length1);
-            }
-          }
-
-          const shadowResults = dmp.patch_apply(patches, shadowText);
-          shadowText = shadowResults[0];
-
-          const editorResults = dmp.patch_apply(patches, oldText);
-          editor.value = editorResults[0];
-
-          const newPos = Math.max(0, Math.min(curStart + offset, editor.value.length));
-          editor.setSelectionRange(newPos, newPos);
-          applied = true;
-        } catch(e) {}
-      }
-
-      if (!applied) {
-        if (oldText.length === 0) {
-          editor.value = data.text;
-          shadowText = data.text;
-          editor.setSelectionRange(0, 0);
+        } else if (op.type === 'delete') {
+          const p = Math.min(op.pos, editor.value.length);
+          const endP = Math.min(p + op.len, editor.value.length);
+          editor.setRangeText('', p, endP, 'preserve');
+          if (endP <= curStart) curStart -= (endP - p);
+          if (endP <= curEnd) curEnd -= (endP - p);
         }
       }
+
+      committedText = editor.value;
+      editor.setSelectionRange(curStart, curEnd);
+
+      // 強行固定滾動軸高度，絕對不跳 5 行
+      editor.scrollTop = savedScrollTop;
 
       updateWordCount();
       updateEndLinePosition();
-      autoGrowTextarea();
       saveToLocalBlackbox();
-
-      if (data.cursor_index !== undefined) {
-        updateRemoteCursor(data.sender_sid, data.cursor_index, '');
-      }
-
-      setTimeout(() => { isApplyingRemote = false; }, 10);
     }
+
+    function flushPendingQueue() {
+      while (pendingRemoteQueue.length > 0) {
+        const item = pendingRemoteQueue.shift();
+        applyRemoteOps(item);
+      }
+    }
+
+    let lastBroadcastTyping = '';
+    function broadcastLiveTyping(str) {
+      if (str !== lastBroadcastTyping) {
+        lastBroadcastTyping = str;
+        socket.emit('cursor_move', {
+          room: roomId,
+          cursor_index: editor.selectionStart,
+          typing_text: str
+        });
+      }
+    }
+
+    function bindEditorEvents() {
+      editor.addEventListener('compositionstart', (e) => { 
+        isComposing = true; 
+        broadcastLiveTyping(e.data || '...');
+      });
+
+      editor.addEventListener('compositionupdate', (e) => {
+        broadcastLiveTyping(e.data || '');
+      });
+
+      editor.addEventListener('input', (e) => {
+        if (e.isComposing || isComposing) {
+          if (e.data) broadcastLiveTyping(e.data);
+          return;
+        }
+        emitLocalChanges();
+      });
+      
+      editor.addEventListener('compositionend', () => {
+        isComposing = false;
+        broadcastLiveTyping('');
+        emitLocalChanges();
+        flushPendingQueue();
+      });
+
+      editor.addEventListener('click', broadcastCursorOnly);
+      editor.addEventListener('keyup', (e) => {
+        if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','Enter'].includes(e.key)) {
+          broadcastCursorOnly();
+        }
+      });
+
+      editor.addEventListener('scroll', () => {
+        redrawAllRemoteCursors();
+        updateEndLinePosition();
+      });
+    }
+    bindEditorEvents();
 
     let lastSentCursor = -1;
     function broadcastCursorOnly() {
-      if (isApplyingRemote || isComposing) return;
+      if (isComposing) return;
       const pos = editor.selectionStart;
       if (pos !== lastSentCursor) {
         lastSentCursor = pos;
@@ -1107,7 +1072,6 @@
       }
     });
 
-    // 🌟 建立帶有「原地 1:1 大字即時字元流」的游標結構
     function updateRemoteCursor(sid, cursorIndex, typingText) {
       let item = remoteCursors.get(sid);
       if (!item) {
@@ -1124,7 +1088,6 @@
         tag.style.backgroundColor = color;
         tag.innerText = label;
 
-        // 原地 1:1 等大幽靈字元節點
         const ghost = document.createElement('span');
         ghost.className = 'remote-inline-ghost';
         ghost.style.display = 'none';
@@ -1154,7 +1117,6 @@
       });
     }
 
-    // 🌟 精確計算搭檔游標的物理像素座標，並將注音以 1:1 大字呈現在畫布原地
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || !editor) return;
@@ -1184,13 +1146,12 @@
       const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
-      // 設置幽靈字體的文字大小與行高，與使用者目前設定完全一模一樣
       item.ghostElement.style.fontSize = cs.fontSize;
       item.ghostElement.style.lineHeight = cs.lineHeight;
 
       if (targetIndex === 0) {
         el.style.left = targetX + 'px';
-        el.style.top = targetY + 'px';
+        el.style.top = (targetY * scaleVal - editor.scrollTop) + 'px';
         el.style.height = fontHeight + 'px';
         el.style.zoom = scaleVal;
         el.style.display = 'block';
@@ -1215,13 +1176,12 @@
         }
 
         el.style.left = targetX + 'px';
-        el.style.top = targetY + 'px';
+        el.style.top = (targetY * scaleVal - editor.scrollTop) + 'px';
         el.style.height = fontHeight + 'px';
         el.style.zoom = scaleVal;
         el.style.display = 'block';
       }
 
-      // 🌟 呈現 1:1 等大原地即時打字流
       if (item.typingText && item.typingText.trim().length > 0) {
         item.ghostElement.innerText = item.typingText;
         item.ghostElement.style.display = 'inline-block';
@@ -1235,12 +1195,7 @@
       for (const sid of remoteCursors.keys()) renderSingleRemoteCursor(sid);
     }
 
-    editorContainer.addEventListener('scroll', () => {
-      redrawAllRemoteCursors();
-      updateEndLinePosition();
-    });
     window.addEventListener('resize', () => { 
-      autoGrowTextarea(); 
       redrawAllRemoteCursors(); 
       updateEndLinePosition();
     });
@@ -1252,22 +1207,35 @@
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
       editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      editor.style.padding = `${py} ${px} 300px ${px}`;
+      editor.style.padding = `${py} ${px} 60px ${px}`;
       if ('zoom' in editor.style) {
         editor.style.zoom = scaleVal;
       } else {
         editor.style.transform = `scale(${scaleVal})`;
         editor.style.width = `${100 / scaleVal}%`;
       }
-      autoGrowTextarea();
       redrawAllRemoteCursors();
       updateEndLinePosition();
     }
 
     function applyAndSync() { 
       applyLocalStyle(); 
-      sendRealtimeSync(); 
+      if (amIMaster) {
+        socket.emit('update_settings', {
+          room: roomId,
+          size: parseInt(document.getElementById('fontSizeInput').value, 10) || 48,
+          scale: parseInt(scaleInput.value, 10) || 100,
+          pad_x: parseInt(padXInput.value, 10) || 8,
+          pad_y: parseInt(padYInput.value, 10) || 10
+        });
+      }
     }
+
+    socket.on('sync_settings', data => {
+      if (data && !amIMaster) {
+        // 協作員端維持獨立視圖
+      }
+    });
     
     function stepScale(delta) { scaleInput.value = Math.min(Math.max((parseInt(scaleInput.value, 10) || 100) + delta, 40), 250); applyAndSync(); }
     function stepPadX(delta) { padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta); applyAndSync(); }
@@ -1479,22 +1447,9 @@
 
     function appendDeltaDirectly(deltaText) {
       if (!deltaText) return;
-      const userCurStart = editor.selectionStart;
-      const userCurEnd = editor.selectionEnd;
-      let val = editor.value;
-
-      let nextText = val + deltaText;
-      editor.value = nextText;
-
-      if (userCurStart < val.length) {
-        editor.setSelectionRange(userCurStart, userCurEnd);
-      } else {
-        const endPos = nextText.length;
-        editor.setSelectionRange(endPos, endPos);
-      }
-
-      sendRealtimeSync();
-      saveToLocalBlackbox();
+      const endPos = editor.value.length;
+      editor.setRangeText(deltaText, endPos, endPos, 'end');
+      emitLocalChanges();
     }
 
     async function toggleAISpeech() {
