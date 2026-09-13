@@ -670,6 +670,19 @@
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
 
+    // 🌟 效能優化 1：使用 requestAnimationFrame 防抖重排
+    let isRenderScheduled = false;
+    function scheduleUIRender() {
+      if (!isRenderScheduled) {
+        isRenderScheduled = true;
+        requestAnimationFrame(() => {
+          redrawAllRemoteCursors();
+          updateEndLinePosition();
+          isRenderScheduled = false;
+        });
+      }
+    }
+
     function changeTheme(themeName) {
       document.body.setAttribute('data-theme', themeName);
       try { localStorage.setItem('STT_PREFERRED_THEME', themeName); } catch(e) {}
@@ -731,7 +744,7 @@
               ops: [{ type: 'insert', pos: 0, text: clean }]
             });
             updateWordCount();
-            updateEndLinePosition();
+            scheduleUIRender();
           }
         }
       } catch(e) {}
@@ -762,7 +775,7 @@
         });
 
         updateWordCount();
-        updateEndLinePosition();
+        scheduleUIRender();
         editor.focus();
       }
     }
@@ -811,7 +824,6 @@
       endLineMarker.style.width = (editor.clientWidth - ((parseFloat(cs.paddingLeft)||8)*2)) + 'px';
     }
 
-    // 🌟 正確連線處理
     socket.on('connect', () => { 
       socket.emit('join', { room: roomId, is_editor: true }); 
     });
@@ -825,7 +837,7 @@
       inFlightOp = null;
       bufferOps = [];
       updateWordCount();
-      updateEndLinePosition();
+      scheduleUIRender();
 
       if (data.settings && amIMaster) {
         if (data.settings.theme) {
@@ -924,7 +936,7 @@
       }
 
       updateWordCount();
-      updateEndLinePosition();
+      scheduleUIRender();
       saveToLocalBlackbox();
     }
 
@@ -944,7 +956,6 @@
       }
     });
 
-    // 🌟 修正 JavaScript 邏輯運算子（全面使用標準 &&）
     function transformOp(op1, op2, priority) {
       if (!op1 || !op2) return op1;
       const t1 = op1.type, p1 = op1.pos;
@@ -993,7 +1004,7 @@
         bufferOps = [];
         remoteComposingMap.clear();
         updateWordCount();
-        updateEndLinePosition();
+        scheduleUIRender();
         return;
       }
 
@@ -1030,7 +1041,7 @@
       }
 
       updateWordCount();
-      updateEndLinePosition();
+      scheduleUIRender();
       saveToLocalBlackbox();
     });
 
@@ -1058,10 +1069,9 @@
       editor.scrollTop = savedScrollTop;
     }
 
-    // 🌟 將夥伴正在敲的注音行內組裝，即時推開後方的字
     function rebuildEditorValueWithComposing() {
       if (remoteComposingMap.size === 0) {
-        editor.value = lastKnownText;
+        if (editor.value !== lastKnownText) editor.value = lastKnownText;
         return;
       }
 
@@ -1080,25 +1090,30 @@
       const savedEnd = editor.selectionEnd;
       const savedTop = editor.scrollTop;
 
-      editor.value = rendered;
-      editor.setSelectionRange(savedStart, savedEnd);
-      editor.scrollTop = savedTop;
+      if (editor.value !== rendered) {
+        editor.value = rendered;
+        editor.setSelectionRange(savedStart, savedEnd);
+        editor.scrollTop = savedTop;
+      }
     }
 
-    let lastSentLiveComp = '';
+    // 🌟 效能優化 2：微秒級防抖（16ms 微合併，消除封包塞車與打字黏滯感）
+    let liveTypingTimer = null;
+    let pendingTypingStr = '';
     function broadcastLiveTyping(str) {
-      if (str !== lastSentLiveComp) {
-        lastSentLiveComp = str;
+      pendingTypingStr = str;
+      clearTimeout(liveTypingTimer);
+      liveTypingTimer = setTimeout(() => {
         socket.emit('live_composing_stream', {
           room: roomId,
           pos: editor.selectionStart,
-          composing_text: str
+          composing_text: pendingTypingStr
         });
         socket.emit('cursor_move', {
           room: roomId,
           cursor_index: editor.selectionStart
         });
-      }
+      }, 16);
     }
 
     socket.on('remote_composing_stream', data => {
@@ -1110,8 +1125,7 @@
         remoteComposingMap.delete(data.sid);
       }
       rebuildEditorValueWithComposing();
-      redrawAllRemoteCursors();
-      updateEndLinePosition();
+      scheduleUIRender();
     });
 
     function bindEditorEvents() {
@@ -1147,8 +1161,7 @@
       });
 
       editor.addEventListener('scroll', () => {
-        redrawAllRemoteCursors();
-        updateEndLinePosition();
+        scheduleUIRender();
       });
     }
     bindEditorEvents();
@@ -1177,8 +1190,7 @@
           remoteCursors.delete(data.sid);
         }
         rebuildEditorValueWithComposing();
-        redrawAllRemoteCursors();
-        updateEndLinePosition();
+        scheduleUIRender();
       }
     });
 
@@ -1206,7 +1218,7 @@
         item.index = cursorIndex;
       }
 
-      renderSingleRemoteCursor(sid);
+      scheduleUIRender();
     }
 
     function updateAllCursorTags() {
@@ -1289,8 +1301,7 @@
     }
 
     window.addEventListener('resize', () => { 
-      redrawAllRemoteCursors(); 
-      updateEndLinePosition();
+      scheduleUIRender();
     });
 
     function applyLocalStyle() {
@@ -1307,8 +1318,7 @@
         editor.style.transform = `scale(${scaleVal})`;
         editor.style.width = `${100 / scaleVal}%`;
       }
-      redrawAllRemoteCursors();
-      updateEndLinePosition();
+      scheduleUIRender();
     }
 
     function applyAndSync() { 
@@ -1579,7 +1589,7 @@
 
     applyLocalStyle();
     updateWordCount();
-    updateEndLinePosition();
+    scheduleUIRender();
   </script>
 </body>
 </html>
