@@ -13,28 +13,24 @@
       --bg-editor: #121212;
       --text-color: #ffff33;
       --caret-color: #ffff33;
-      --ghost-color: #38bdf8;
     }
     body[data-theme="green"] {
       --bg-main: #c7edcc;
       --bg-editor: #d2edd2;
       --text-color: #111827;
       --caret-color: #047857;
-      --ghost-color: #065f46;
     }
     body[data-theme="navy"] {
       --bg-main: #0b132b;
       --bg-editor: #1c2541;
       --text-color: #e0e1dd;
       --caret-color: #38bdf8;
-      --ghost-color: #38bdf8;
     }
     body[data-theme="light"] {
       --bg-main: #f1f5f9;
       --bg-editor: #ffffff;
       --text-color: #0f172a;
       --caret-color: #0f172a;
-      --ghost-color: #1d4ed8;
     }
 
     body {
@@ -214,7 +210,7 @@
       overflow: hidden !important;
     }
 
-    /* 🌟 回歸真實原生可見文字：絕對不搞任何透明與偽裝 */
+    /* 🌟 聽打輸入框：自身輸入永遠 100% 實體可見，打注音清晰銳利 */
     #editor {
       width: 100%;
       height: 100%;
@@ -226,7 +222,7 @@
       font-size: 48px;
       line-height: 1.15;
       letter-spacing: 0px;
-      color: var(--text-color) !important; /* 🌟 確保打字、注音 100% 絕對可見 */
+      color: var(--text-color) !important;
       background: transparent;
       caret-color: var(--caret-color);
       white-space: pre-wrap;
@@ -282,7 +278,7 @@
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
     }
 
-    /* 🌟 夥伴游標（純游標線 + 懸浮標籤） */
+    /* 🌟 Google Docs 級夥伴游標線 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -305,23 +301,6 @@
       user-select: none;
       box-shadow: 0 2px 6px rgba(0,0,0,0.6);
       z-index: 60;
-    }
-    /* 🌟 夥伴正在打的注音浮動提示：掛在游標正上方標籤旁，絕不蓋在文字上！ */
-    .remote-typing-pill {
-      position: absolute;
-      top: -24px;
-      left: calc(100% + 4px);
-      background: rgba(15, 23, 42, 0.95);
-      border: 1px solid #38bdf8;
-      color: #38bdf8;
-      font-size: 11px;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      padding: 1px 6px;
-      border-radius: 3px;
-      white-space: nowrap;
-      display: none;
-      pointer-events: none;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.6);
     }
 
     #aiStreamBar {
@@ -681,13 +660,15 @@
     let currentMasterSid = null;
     let isComposing = false;
 
-    // 🌟 Google Docs 級狀態機
     let serverVersion = 0;
     let inFlightOp = null;
     let bufferOps = [];
     let lastKnownText = "";
 
+    // 🌟 記錄夥伴未定稿暫存字：{ sid: { pos: 0, text: '' } }
+    const remoteComposingMap = new Map();
     const remoteCursors = new Map();
+
     const audienceUrl = window.location.origin + '/view/' + roomId;
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
@@ -717,7 +698,7 @@
       clearTimeout(localSaveDebounce);
       localSaveDebounce = setTimeout(() => {
         try {
-          const raw = editor.value;
+          const raw = lastKnownText;
           if (raw && raw.trim().length > 0) {
             localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify({
               text: raw,
@@ -744,8 +725,8 @@
           
           if (restoreConfirm) {
             const clean = savedData.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            editor.value = clean;
             lastKnownText = clean;
+            editor.value = clean;
             editor.setSelectionRange(clean.length, clean.length);
             socket.emit('client_operation', {
               room: roomId,
@@ -773,6 +754,7 @@
         lastKnownText = '';
         inFlightOp = null;
         bufferOps = [];
+        remoteComposingMap.clear();
         editor.setSelectionRange(0, 0);
         try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {}
         
@@ -789,7 +771,7 @@
     }
 
     function handleBeforeUnload(e) {
-      if (editor && editor.value && editor.value.trim().length > 0) {
+      if (lastKnownText && lastKnownText.trim().length > 0) {
         e = e || window.event;
         const msg = "您輸入的逐字稿尚未匯出，確定要離開嗎？";
         if (e) {
@@ -839,8 +821,8 @@
     socket.on('init_document', data => {
       if (!data) return;
       const clean = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      editor.value = clean;
       lastKnownText = clean;
+      editor.value = clean;
       serverVersion = data.version || 0;
       inFlightOp = null;
       bufferOps = [];
@@ -919,6 +901,7 @@
       return ops;
     }
 
+    // 🌟 本地定稿打字
     function handleLocalTyping() {
       const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (editor.value !== currentText) editor.value = currentText;
@@ -969,7 +952,7 @@
       const t1 = op1.type, p1 = op1.pos;
       const t2 = op2.type, p2 = op2.pos;
 
-      if (t1 === 'insert' && t2 === 'insert') {
+      if (t1 === 'insert' and t2 === 'insert') {
         const l2 = op2.text.length;
         if (p1 < p2 || (p1 === p2 && priority === 'left')) {
           return { type: 'insert', pos: p1, text: op1.text };
@@ -1001,6 +984,7 @@
       return op1;
     }
 
+    // 🌟 定稿同步：定稿進入時，立刻清空該夥伴的暫存推展
     socket.on('remote_operation', data => {
       if (!data || data.sender_sid === socket.id) return;
 
@@ -1010,9 +994,15 @@
         serverVersion = data.version;
         inFlightOp = null;
         bufferOps = [];
+        remoteComposingMap.clear();
         updateWordCount();
         updateEndLinePosition();
         return;
+      }
+
+      // 清空該夥伴的臨時推移
+      if (data.sender_sid) {
+        remoteComposingMap.delete(data.sender_sid);
       }
 
       serverVersion = data.version;
@@ -1055,66 +1045,115 @@
 
       if (op.type === 'insert') {
         const insertText = op.text;
-        const p = Math.min(op.pos, editor.value.length);
-        editor.setRangeText(insertText, p, p, 'preserve');
+        const p = Math.min(op.pos, lastKnownText.length);
+        lastKnownText = lastKnownText.slice(0, p) + insertText + lastKnownText.slice(p);
         if (p <= curStart) curStart += insertText.length;
         if (p < curEnd) curEnd += insertText.length;
       } else if (op.type === 'delete') {
-        const p = Math.min(op.pos, editor.value.length);
-        const endP = Math.min(p + op.len, editor.value.length);
-        editor.setRangeText('', p, endP, 'preserve');
+        const p = Math.min(op.pos, lastKnownText.length);
+        const endP = Math.min(p + op.len, lastKnownText.length);
+        lastKnownText = lastKnownText.slice(0, p) + lastKnownText.slice(endP);
         if (endP <= curStart) curStart -= (endP - p);
         if (endP <= curEnd) curEnd -= (endP - p);
       }
 
-      lastKnownText = editor.value;
+      // 重新渲染包含可能存在的其他夥伴暫存字
+      rebuildEditorValueWithComposing();
       editor.setSelectionRange(curStart, curEnd);
       editor.scrollTop = savedScrollTop;
     }
 
-    let lastSentComposing = '';
+    // 🌟 核心：將 lastKnownText 加上所有夥伴正在敲的注音，即時在畫面把字往後推開！
+    function rebuildEditorValueWithComposing() {
+      if (remoteComposingMap.size === 0) {
+        editor.value = lastKnownText;
+        return;
+      }
+
+      // 按照插入位置由小到大排列
+      const comps = Array.from(remoteComposingMap.values()).sort((a, b) => a.pos - b.pos);
+      let rendered = '';
+      let lastIdx = 0;
+
+      for (const c of comps) {
+        const p = Math.min(Math.max(c.pos, 0), lastKnownText.length);
+        rendered += lastKnownText.substring(lastIdx, p) + c.text;
+        lastIdx = p;
+      }
+      rendered += lastKnownText.substring(lastIdx);
+
+      const savedStart = editor.selectionStart;
+      const savedEnd = editor.selectionEnd;
+      const savedTop = editor.scrollTop;
+
+      editor.value = rendered;
+
+      editor.setSelectionRange(savedStart, savedEnd);
+      editor.scrollTop = savedTop;
+    }
+
+    // 🌟 核心：毫秒級發送正在打的注音/暫存字，即時通知對方把字往後推
+    let lastSentLiveComp = '';
     function broadcastLiveTyping(str) {
-      if (str !== lastSentComposing) {
-        lastSentComposing = str;
-        // 1. 廣播給夥伴游標位置與注音文字
+      if (str !== lastSentLiveComp) {
+        lastSentLiveComp = str;
+        // 1. 廣播給夥伴：通知「我在這個字元位置敲注音，請把我後面的字往後推！」
+        socket.emit('live_composing_stream', {
+          room: roomId,
+          pos: editor.selectionStart,
+          composing_text: str
+        });
+        // 2. 廣播給游標
         socket.emit('cursor_move', {
           room: roomId,
-          cursor_index: editor.selectionStart,
-          typing_text: str
+          cursor_index: editor.selectionStart
         });
-        // 2. 廣播給大螢幕
-        if (amIMaster) {
-          socket.emit('live_composing', {
-            room: roomId,
-            composing_text: str
-          });
-        }
       }
     }
 
+    // 🌟 接收夥伴在行內敲注音的動作：立刻把字往後推開！
+    socket.on('remote_composing_stream', data => {
+      if (!data || !data.sid || data.sid === socket.id) return;
+      const text = data.composing_text || '';
+      if (text.length > 0) {
+        remoteComposingMap.set(data.sid, { pos: data.pos, text: text });
+      } else {
+        remoteComposingMap.delete(data.sid);
+      }
+      // 🌟 重新組裝畫面：字元立刻在夥伴游標處被推進推開！
+      rebuildEditorValueWithComposing();
+      redrawAllRemoteCursors();
+      updateEndLinePosition();
+    });
+
     function bindEditorEvents() {
+      // 監聽微軟注音開始組字（例如按 ㄍ）
       editor.addEventListener('compositionstart', (e) => { 
         isComposing = true; 
         broadcastLiveTyping(e.data || '...');
       });
 
+      // 監聽注音拼音字根跳動（例如按 ㄍ、ㄠ、ㄒ）
       editor.addEventListener('compositionupdate', (e) => {
         broadcastLiveTyping(e.data || '');
       });
 
       editor.addEventListener('input', (e) => {
+        // 如果正在打注音，即刻推擠對方畫面
         if (e.isComposing || isComposing) {
           if (e.data) broadcastLiveTyping(e.data);
           return;
         }
+        // 若直接按定稿或貼上
         broadcastLiveTyping('');
         handleLocalTyping();
       });
       
+      // 按 Enter 或空格確定定稿
       editor.addEventListener('compositionend', () => {
         isComposing = false;
-        broadcastLiveTyping('');
-        handleLocalTyping();
+        broadcastLiveTyping(''); // 通知對方清空臨時推展
+        handleLocalTyping();     // 固化真實文字
       });
 
       editor.addEventListener('click', broadcastCursorOnly);
@@ -1137,25 +1176,30 @@
       const pos = editor.selectionStart;
       if (pos !== lastSentCursor) {
         lastSentCursor = pos;
-        socket.emit('cursor_move', { room: roomId, cursor_index: pos, typing_text: '' });
+        socket.emit('cursor_move', { room: roomId, cursor_index: pos });
       }
     }
 
     socket.on('cursor_update', data => {
       if (!data || !data.sid || data.sid === socket.id) return;
-      updateRemoteCursor(data.sid, data.cursor_index, data.typing_text || '');
+      updateRemoteCursor(data.sid, data.cursor_index);
     });
 
     socket.on('cursor_remove', data => {
-      if (data && data.sid && remoteCursors.has(data.sid)) {
-        const item = remoteCursors.get(data.sid);
-        if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
-        remoteCursors.delete(data.sid);
+      if (data && data.sid) {
+        remoteComposingMap.delete(data.sid);
+        if (remoteCursors.has(data.sid)) {
+          const item = remoteCursors.get(data.sid);
+          if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
+          remoteCursors.delete(data.sid);
+        }
+        rebuildEditorValueWithComposing();
+        redrawAllRemoteCursors();
+        updateEndLinePosition();
       }
     });
 
-    // 🌟 夥伴游標線 + 正在敲打的注音浮動在標籤旁（絕不遮擋任何本體字！）
-    function updateRemoteCursor(sid, cursorIndex, typingText) {
+    function updateRemoteCursor(sid, cursorIndex) {
       let item = remoteCursors.get(sid);
       if (!item) {
         const isTargetMaster = (sid === currentMasterSid);
@@ -1171,19 +1215,14 @@
         tag.style.backgroundColor = color;
         tag.innerText = label;
 
-        const typingPill = document.createElement('div');
-        typingPill.className = 'remote-typing-pill';
-
         el.appendChild(tag);
-        el.appendChild(typingPill);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag, pillElement: typingPill, typingText: '' };
+        item = { index: cursorIndex, element: el, tagElement: tag };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
       }
 
-      item.typingText = typingText || '';
       renderSingleRemoteCursor(sid);
     }
 
@@ -1259,15 +1298,6 @@
         el.style.height = fontHeight + 'px';
         el.style.zoom = scaleVal;
         el.style.display = 'block';
-      }
-
-      // 🌟 若夥伴正在敲注音或組字，在游標上方標籤旁邊掛載一個小提示膠囊（絕不遮擋正文字）
-      if (item.typingText && item.typingText.trim().length > 0) {
-        item.pillElement.innerText = `正在輸入: ${item.typingText}`;
-        item.pillElement.style.display = 'block';
-      } else {
-        item.pillElement.innerText = '';
-        item.pillElement.style.display = 'none';
       }
     }
 
@@ -1378,7 +1408,7 @@
       URL.revokeObjectURL(a.href);
     }
     function exportTxt(withHeader = false) {
-      const text = editor.value.trimEnd();
+      const text = lastKnownText.trimEnd();
       if (!text.trim()) { alert('目前尚無內容！'); return; }
       let content = text;
       if (withHeader) {
@@ -1387,7 +1417,7 @@
       downloadBlob(new Blob(["\uFEFF" + content], { type: 'text/plain;charset=utf-8' }), `${getFileTimestamp()}_頻道${roomId}_逐字稿.txt`);
     }
     function exportDoc() {
-      const text = editor.value.trimEnd();
+      const text = lastKnownText.trimEnd();
       if (!text.trim()) { alert('目前尚無內容！'); return; }
       const formattedHtml = text.split('\n').map(p => `<p style="margin:0 0 8px 0;line-height:1.2;">${p||'&nbsp;'}</p>`).join('');
       const wordHtml = `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>聽打逐字稿</title><style>body{font-family:"標楷體",serif;font-size:14pt;line-height:1.2;}</style></head><body>${formattedHtml}</body></html>`;
