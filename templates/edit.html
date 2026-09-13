@@ -13,32 +13,24 @@
       --bg-editor: #121212;
       --text-color: #ffff33;
       --caret-color: #ffff33;
-      --ghost-bg: rgba(56, 189, 248, 0.25);
-      --ghost-color: #38bdf8;
     }
     body[data-theme="green"] {
       --bg-main: #c7edcc;
       --bg-editor: #d2edd2;
       --text-color: #111827;
       --caret-color: #047857;
-      --ghost-bg: rgba(4, 120, 87, 0.2);
-      --ghost-color: #065f46;
     }
     body[data-theme="navy"] {
       --bg-main: #0b132b;
       --bg-editor: #1c2541;
       --text-color: #e0e1dd;
       --caret-color: #38bdf8;
-      --ghost-bg: rgba(56, 189, 248, 0.25);
-      --ghost-color: #38bdf8;
     }
     body[data-theme="light"] {
       --bg-main: #f1f5f9;
       --bg-editor: #ffffff;
       --text-color: #0f172a;
       --caret-color: #0f172a;
-      --ghost-bg: rgba(37, 99, 235, 0.15);
-      --ghost-color: #1d4ed8;
     }
 
     body {
@@ -285,6 +277,7 @@
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
     }
 
+    /* 🌟 純淨 Google Docs 級光標：只有細豎線與頭銜標籤，絕無半透明蓋字層 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -307,29 +300,6 @@
       user-select: none;
       box-shadow: 0 2px 6px rgba(0,0,0,0.6);
       z-index: 60;
-    }
-
-    .remote-inline-ghost {
-      position: absolute;
-      left: 3px;
-      top: 0;
-      display: inline-block;
-      white-space: nowrap;
-      pointer-events: none;
-      background: var(--ghost-bg);
-      color: var(--ghost-color);
-      border-bottom: 2px dashed var(--ghost-color);
-      padding: 0 2px;
-      border-radius: 2px;
-      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
-      line-height: 1.15;
-      letter-spacing: 0px;
-      animation: ghostBlink 1s infinite alternate;
-      z-index: 45;
-    }
-    @keyframes ghostBlink {
-      from { opacity: 0.85; }
-      to { opacity: 1; }
     }
 
     #aiStreamBar {
@@ -689,7 +659,6 @@
     let currentMasterSid = null;
     let isComposing = false;
 
-    // 🌟 Google Docs 級狀態機
     let serverVersion = 0;
     let inFlightOp = null;
     let bufferOps = [];
@@ -1080,7 +1049,6 @@
       editor.scrollTop = savedScrollTop;
     }
 
-    // 🌟 毫秒級主投影同步：只要鍵盤有動靜，立即將主聽打員畫面字元同步給大螢幕
     let lastSentComposing = '';
     function broadcastLiveTyping(str) {
       if (str !== lastSentComposing) {
@@ -1090,7 +1058,6 @@
           cursor_index: editor.selectionStart,
           typing_text: str
         });
-        // 🌟 主控員在打字時，即時把敲擊內容同步給觀眾端大螢幕
         if (amIMaster) {
           socket.emit('live_composing', {
             room: roomId,
@@ -1101,13 +1068,11 @@
     }
 
     function bindEditorEvents() {
-      // 監聽注音開始組字
       editor.addEventListener('compositionstart', (e) => { 
         isComposing = true; 
         broadcastLiveTyping(e.data || '...');
       });
 
-      // 監聽注音拼音字根跳動（例如按 ㄍ、ㄠ、ㄒ）
       editor.addEventListener('compositionupdate', (e) => {
         broadcastLiveTyping(e.data || '');
       });
@@ -1121,7 +1086,6 @@
         handleLocalTyping();
       });
       
-      // 按 Enter 確定定稿
       editor.addEventListener('compositionend', (e) => {
         isComposing = false;
         broadcastLiveTyping('');
@@ -1154,7 +1118,7 @@
 
     socket.on('cursor_update', data => {
       if (!data || !data.sid || data.sid === socket.id) return;
-      updateRemoteCursor(data.sid, data.cursor_index, data.typing_text || '');
+      updateRemoteCursor(data.sid, data.cursor_index);
     });
 
     socket.on('cursor_remove', data => {
@@ -1165,7 +1129,8 @@
       }
     });
 
-    function updateRemoteCursor(sid, cursorIndex, typingText) {
+    // 🌟 徹底拔除蓋在字上的半透明字體，僅保留細垂直線
+    function updateRemoteCursor(sid, cursorIndex) {
       let item = remoteCursors.get(sid);
       if (!item) {
         const isTargetMaster = (sid === currentMasterSid);
@@ -1181,20 +1146,14 @@
         tag.style.backgroundColor = color;
         tag.innerText = label;
 
-        const ghost = document.createElement('span');
-        ghost.className = 'remote-inline-ghost';
-        ghost.style.display = 'none';
-
         el.appendChild(tag);
-        el.appendChild(ghost);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag, ghostElement: ghost, typingText: '' };
+        item = { index: cursorIndex, element: el, tagElement: tag };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
       }
 
-      item.typingText = typingText || '';
       renderSingleRemoteCursor(sid);
     }
 
@@ -1239,9 +1198,6 @@
       const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
-      item.ghostElement.style.fontSize = cs.fontSize;
-      item.ghostElement.style.lineHeight = cs.lineHeight;
-
       if (targetIndex === 0) {
         el.style.left = targetX + 'px';
         el.style.top = (targetY * scaleVal - editor.scrollTop) + 'px';
@@ -1273,14 +1229,6 @@
         el.style.height = fontHeight + 'px';
         el.style.zoom = scaleVal;
         el.style.display = 'block';
-      }
-
-      if (item.typingText && item.typingText.trim().length > 0) {
-        item.ghostElement.innerText = item.typingText;
-        item.ghostElement.style.display = 'inline-block';
-      } else {
-        item.ghostElement.innerText = '';
-        item.ghostElement.style.display = 'none';
       }
     }
 
