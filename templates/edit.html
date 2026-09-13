@@ -210,6 +210,7 @@
       overflow: hidden !important;
     }
 
+    /* 🌟 原生編輯器：絕對鎖定文字排版，禁止任何額外空間擠壓 */
     #editor {
       width: 100%;
       height: 100%;
@@ -219,7 +220,7 @@
       padding: 16px 8px 60px 8px;
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
       font-size: 48px;
-      line-height: 1.15;
+      line-height: 1.25;
       letter-spacing: 0px;
       color: var(--text-color) !important;
       background: transparent;
@@ -275,9 +276,10 @@
       text-align: justify;
       box-sizing: border-box;
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
+      line-height: 1.25;
+      letter-spacing: 0px;
     }
 
-    /* 🌟 Google Docs 級光標線 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -669,6 +671,18 @@
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
 
+    let isRenderScheduled = false;
+    function scheduleUIRender() {
+      if (!isRenderScheduled) {
+        isRenderScheduled = true;
+        requestAnimationFrame(() => {
+          redrawAllRemoteCursors();
+          updateEndLinePosition();
+          isRenderScheduled = false;
+        });
+      }
+    }
+
     function changeTheme(themeName) {
       document.body.setAttribute('data-theme', themeName);
       try { localStorage.setItem('STT_PREFERRED_THEME', themeName); } catch(e) {}
@@ -730,7 +744,7 @@
               ops: [{ type: 'insert', pos: 0, text: clean }]
             });
             updateWordCount();
-            updateEndLinePosition();
+            scheduleUIRender();
           }
         }
       } catch(e) {}
@@ -760,7 +774,7 @@
         });
 
         updateWordCount();
-        updateEndLinePosition();
+        scheduleUIRender();
         editor.focus();
       }
     }
@@ -797,7 +811,7 @@
       mirrorDiv.appendChild(document.createTextNode(editor.value || ''));
       
       const bottomProbe = document.createElement('span');
-      bottomProbe.textContent = '\u200b';
+      bottomProbe.textContent = ' ';
       mirrorDiv.appendChild(bottomProbe);
 
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
@@ -822,7 +836,7 @@
       inFlightOp = null;
       bufferOps = [];
       updateWordCount();
-      updateEndLinePosition();
+      scheduleUIRender();
 
       if (data.settings && amIMaster) {
         if (data.settings.theme) {
@@ -896,7 +910,6 @@
       return ops;
     }
 
-    // 🌟 本地打字觸發：只在文字真正有異動時才送出
     function handleLocalTyping() {
       const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (editor.value !== currentText) editor.value = currentText;
@@ -922,7 +935,7 @@
       }
 
       updateWordCount();
-      updateEndLinePosition();
+      scheduleUIRender();
       saveToLocalBlackbox();
     }
 
@@ -979,7 +992,6 @@
       return op1;
     }
 
-    // 🌟 接收搭檔的遠端動作：使用微創 setRangeText，絕不重置排版，絕不往下跳行！
     socket.on('remote_operation', data => {
       if (!data || data.sender_sid === socket.id) return;
 
@@ -990,7 +1002,7 @@
         inFlightOp = null;
         bufferOps = [];
         updateWordCount();
-        updateEndLinePosition();
+        scheduleUIRender();
         return;
       }
 
@@ -1023,11 +1035,11 @@
       }
 
       updateWordCount();
-      updateEndLinePosition();
+      scheduleUIRender();
       saveToLocalBlackbox();
     });
 
-    // 🌟 微創注入：保持原生滾動軸與行數絕對穩定
+    // 🌟 原生微創注入：游標鎖定，絕不重算整篇文字排版，徹底杜絕跳行
     function applyOpToDOM(op) {
       let curStart = editor.selectionStart;
       let curEnd = editor.selectionEnd;
@@ -1049,7 +1061,7 @@
 
       committedText = editor.value;
       editor.setSelectionRange(curStart, curEnd);
-      editor.scrollTop = savedScrollTop; // 滾動條絕對錨定
+      editor.scrollTop = savedScrollTop;
     }
 
     function bindEditorEvents() {
@@ -1075,8 +1087,7 @@
       });
 
       editor.addEventListener('scroll', () => {
-        redrawAllRemoteCursors();
-        updateEndLinePosition();
+        scheduleUIRender();
       });
     }
     bindEditorEvents();
@@ -1101,8 +1112,7 @@
         const item = remoteCursors.get(data.sid);
         if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
         remoteCursors.delete(data.sid);
-        redrawAllRemoteCursors();
-        updateEndLinePosition();
+        scheduleUIRender();
       }
     });
 
@@ -1130,7 +1140,7 @@
         item.index = cursorIndex;
       }
 
-      renderSingleRemoteCursor(sid);
+      scheduleUIRender();
     }
 
     function updateAllCursorTags() {
@@ -1145,6 +1155,7 @@
       });
     }
 
+    // 🌟 純文字靜態克隆測量：絕不插入破壞排版的 probe 節點，100% 杜絕折行誤判與跳行
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
       if (!item || !editor) return;
@@ -1165,40 +1176,27 @@
       mirrorDiv.style.width = editor.clientWidth + 'px';
 
       const fullVal = editor.value;
-      const targetCharIdx = Math.max(0, targetIndex - 1);
-      
       mirrorDiv.innerHTML = '';
 
-      let targetX = parseFloat(cs.paddingLeft) || 8;
-      let targetY = parseFloat(cs.paddingTop) || 16;
-      const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
+      const fontHeight = parseFloat(cs.fontSize) || 48;
 
       if (targetIndex === 0) {
-        el.style.left = targetX + 'px';
-        el.style.top = (targetY * scaleVal - editor.scrollTop) + 'px';
+        el.style.left = (parseFloat(cs.paddingLeft) || 8) + 'px';
+        el.style.top = ((parseFloat(cs.paddingTop) || 16) * scaleVal - editor.scrollTop) + 'px';
         el.style.height = fontHeight + 'px';
         el.style.zoom = scaleVal;
         el.style.display = 'block';
       } else {
-        const preText = fullVal.substring(0, targetCharIdx);
-        const targetChar = fullVal.charAt(targetCharIdx);
-
+        const preText = fullVal.substring(0, targetIndex);
         mirrorDiv.appendChild(document.createTextNode(preText));
-        const charSpan = document.createElement('span');
-        charSpan.textContent = targetChar;
-        mirrorDiv.appendChild(charSpan);
+        
+        const anchor = document.createElement('span');
+        anchor.textContent = '|';
+        mirrorDiv.appendChild(anchor);
 
-        if (targetChar === '\n') {
-          const nextProbe = document.createElement('span');
-          nextProbe.textContent = '\u200b';
-          mirrorDiv.appendChild(nextProbe);
-          targetX = nextProbe.offsetLeft;
-          targetY = nextProbe.offsetTop;
-        } else {
-          targetX = charSpan.offsetLeft + charSpan.offsetWidth;
-          targetY = charSpan.offsetTop;
-        }
+        const targetX = anchor.offsetLeft;
+        const targetY = anchor.offsetTop;
 
         el.style.left = targetX + 'px';
         el.style.top = (targetY * scaleVal - editor.scrollTop) + 'px';
@@ -1213,8 +1211,7 @@
     }
 
     window.addEventListener('resize', () => { 
-      redrawAllRemoteCursors(); 
-      updateEndLinePosition();
+      scheduleUIRender();
     });
 
     function applyLocalStyle() {
@@ -1231,8 +1228,7 @@
         editor.style.transform = `scale(${scaleVal})`;
         editor.style.width = `${100 / scaleVal}%`;
       }
-      redrawAllRemoteCursors();
-      updateEndLinePosition();
+      scheduleUIRender();
     }
 
     function applyAndSync() { 
@@ -1503,7 +1499,7 @@
 
     applyLocalStyle();
     updateWordCount();
-    updateEndLinePosition();
+    scheduleUIRender();
   </script>
 </body>
 </html>
