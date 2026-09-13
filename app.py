@@ -223,7 +223,19 @@ def handle_client_operation(data):
         }, to=room_id, include_self=False)
 
 
-# 🌟 即時未定稿敲鍵串流（包含注音、改字、行內補字即時廣播）
+# 🌟 協作員打字即時推移：敲注音或選字時，即刻推擠協作夥伴畫面，把字往後推
+@socketio.on('live_composing_stream')
+def handle_live_composing_stream(data):
+    room_id = data.get('room')
+    sid = request.sid
+    if room_id in rooms:
+        emit('remote_composing_stream', {
+            'sid': sid,
+            'pos': data.get('pos', 0),
+            'composing_text': data.get('composing_text', '')
+        }, to=room_id, include_self=False)
+
+
 @socketio.on('cursor_move')
 def handle_cursor_move(data):
     room_id = data.get('room')
@@ -231,21 +243,7 @@ def handle_cursor_move(data):
     if room_id in rooms:
         emit('cursor_update', {
             'sid': sid,
-            'cursor_index': data.get('cursor_index', 0),
-            'typing_text': data.get('typing_text', '')
-        }, to=room_id, include_self=False)
-
-
-# 🌟 觀眾大螢幕即時組字
-@socketio.on('live_composing')
-def handle_live_composing(data):
-    room_id = data.get('room')
-    sid = request.sid
-    if room_id in rooms:
-        emit('audience_live_composing', {
-            'sid': sid,
-            'base_text': rooms[room_id]["text"],
-            'composing_text': data.get('composing_text', '')
+            'cursor_index': data.get('cursor_index', 0)
         }, to=room_id, include_self=False)
 
 
