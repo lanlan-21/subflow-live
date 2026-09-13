@@ -9,30 +9,38 @@
   <style>
     * { box-sizing: border-box; }
     
-    /* 🌟 主題色系定義：淡綠護眼配深黑字 */
+    /* 🌟 主題色系：淡綠護眼配深黑字 */
     body[data-theme="dark"] {
       --bg-main: #0a0a0a;
       --bg-editor: #121212;
       --text-color: #ffff33;
       --caret-color: #ffff33;
+      --ghost-bg: rgba(56, 189, 248, 0.25);
+      --ghost-color: #38bdf8;
     }
     body[data-theme="green"] {
-      --bg-main: #c7edcc;      /* 經典護眼豆沙綠外底 */
-      --bg-editor: #d2edd2;    /* 柔和護眼內底 */
-      --text-color: #111827;   /* 高對比純黑字 */
-      --caret-color: #047857;  /* 墨綠色游標 */
+      --bg-main: #c7edcc;
+      --bg-editor: #d2edd2;
+      --text-color: #111827;
+      --caret-color: #047857;
+      --ghost-bg: rgba(4, 120, 87, 0.2);
+      --ghost-color: #065f46;
     }
     body[data-theme="navy"] {
       --bg-main: #0b132b;
       --bg-editor: #1c2541;
       --text-color: #e0e1dd;
       --caret-color: #38bdf8;
+      --ghost-bg: rgba(56, 189, 248, 0.25);
+      --ghost-color: #38bdf8;
     }
     body[data-theme="light"] {
       --bg-main: #f1f5f9;
       --bg-editor: #ffffff;
       --text-color: #0f172a;
       --caret-color: #0f172a;
+      --ghost-bg: rgba(37, 99, 235, 0.15);
+      --ghost-color: #1d4ed8;
     }
 
     body {
@@ -276,6 +284,7 @@
       box-sizing: border-box;
     }
 
+    /* 🌟 Google Docs 級彩色游標與原地 1:1 大字即時注音流 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -283,7 +292,7 @@
       z-index: 50;
       display: none;
       transform-origin: top left;
-      transition: left 0.08s ease-out, top 0.08s ease-out;
+      transition: left 0.05s ease-out, top 0.05s ease-out;
     }
     .remote-cursor-tag {
       position: absolute;
@@ -297,24 +306,31 @@
       white-space: nowrap;
       user-select: none;
       box-shadow: 0 2px 6px rgba(0,0,0,0.6);
+      z-index: 60;
     }
-    .remote-typing-ghost {
+
+    /* 🌟 1:1 等大、原地排版、Google Docs 式注音暫存字 */
+    .remote-inline-ghost {
       position: absolute;
-      left: 6px;
-      top: -2px;
-      background: rgba(14, 165, 233, 0.2);
-      border-bottom: 2px solid #0284c7;
-      color: #0284c7;
-      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
-      font-size: 0.85em;
+      left: 3px;
+      top: 0;
+      display: inline-block;
       white-space: nowrap;
-      border-radius: 3px;
-      padding: 0 4px;
-      animation: pulseGlow 0.9s infinite alternate;
+      pointer-events: none;
+      background: var(--ghost-bg);
+      color: var(--ghost-color);
+      border-bottom: 2px dashed var(--ghost-color);
+      padding: 0 2px;
+      border-radius: 2px;
+      font-family: "DFKai-SB", "BiauKai", "標楷體", serif;
+      line-height: 1.15;
+      letter-spacing: 0px;
+      animation: ghostBlink 1s infinite alternate;
+      z-index: 45;
     }
-    @keyframes pulseGlow {
-      from { opacity: 0.7; transform: scale(0.98); }
-      to { opacity: 1; transform: scale(1); }
+    @keyframes ghostBlink {
+      from { opacity: 0.85; }
+      to { opacity: 1; }
     }
 
     #aiStreamBar {
@@ -909,6 +925,7 @@
       socket.emit('claim_master', { room: roomId });
     }
 
+    // 🌟 核心：監聽注音輸入法，以極高頻率廣播未定稿字詞
     function bindEditorEvents() {
       editor.addEventListener('compositionstart', () => { 
         isComposing = true; 
@@ -924,6 +941,7 @@
       
       editor.addEventListener('compositionend', () => {
         isComposing = false;
+        // 定稿完成，清空搭檔畫面上的暫存幽靈字
         socket.emit('cursor_move', {
           room: roomId,
           cursor_index: editor.selectionStart,
@@ -1007,12 +1025,10 @@
       applySingleRemoteDelta(data);
     });
 
-    // 🌟 核心防跳字：DMP 三向合併 + 精確相對位移
     function applySingleRemoteDelta(data) {
       if (typeof data.text !== 'string') return;
 
       const curStart = editor.selectionStart;
-      const curEnd = editor.selectionEnd;
       const oldText = editor.value;
 
       if (oldText === data.text) {
@@ -1042,7 +1058,6 @@
           const editorResults = dmp.patch_apply(patches, oldText);
           editor.value = editorResults[0];
 
-          // 游標錨定：在前方則位移，在後方則維持 0 位移不亂跳
           const newPos = Math.max(0, Math.min(curStart + offset, editor.value.length));
           editor.setSelectionRange(newPos, newPos);
           applied = true;
@@ -1092,6 +1107,7 @@
       }
     });
 
+    // 🌟 建立帶有「原地 1:1 大字即時字元流」的游標結構
     function updateRemoteCursor(sid, cursorIndex, typingText) {
       let item = remoteCursors.get(sid);
       if (!item) {
@@ -1108,26 +1124,21 @@
         tag.style.backgroundColor = color;
         tag.innerText = label;
 
-        const ghost = document.createElement('div');
-        ghost.className = 'remote-typing-ghost';
+        // 原地 1:1 等大幽靈字元節點
+        const ghost = document.createElement('span');
+        ghost.className = 'remote-inline-ghost';
         ghost.style.display = 'none';
 
         el.appendChild(tag);
         el.appendChild(ghost);
         remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, tagElement: tag, ghostElement: ghost };
+        item = { index: cursorIndex, element: el, tagElement: tag, ghostElement: ghost, typingText: '' };
         remoteCursors.set(sid, item);
       } else {
         item.index = cursorIndex;
       }
 
-      if (typingText) {
-        item.ghostElement.innerText = '正在輸入：' + typingText;
-        item.ghostElement.style.display = 'block';
-      } else {
-        item.ghostElement.style.display = 'none';
-      }
-
+      item.typingText = typingText || '';
       renderSingleRemoteCursor(sid);
     }
 
@@ -1143,9 +1154,10 @@
       });
     }
 
+    // 🌟 精確計算搭檔游標的物理像素座標，並將注音以 1:1 大字呈現在畫布原地
     function renderSingleRemoteCursor(sid) {
       const item = remoteCursors.get(sid);
-      if (!item || !editor || !editor.value) return;
+      if (!item || !editor) return;
 
       const el = item.element;
       const targetIndex = Math.min(Math.max(item.index, 0), editor.value.length);
@@ -1172,39 +1184,51 @@
       const fontHeight = parseFloat(cs.fontSize) || 48;
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
 
+      // 設置幽靈字體的文字大小與行高，與使用者目前設定完全一模一樣
+      item.ghostElement.style.fontSize = cs.fontSize;
+      item.ghostElement.style.lineHeight = cs.lineHeight;
+
       if (targetIndex === 0) {
         el.style.left = targetX + 'px';
         el.style.top = targetY + 'px';
         el.style.height = fontHeight + 'px';
         el.style.zoom = scaleVal;
         el.style.display = 'block';
-        return;
-      }
-
-      const preText = fullVal.substring(0, targetCharIdx);
-      const targetChar = fullVal.charAt(targetCharIdx);
-
-      mirrorDiv.appendChild(document.createTextNode(preText));
-      const charSpan = document.createElement('span');
-      charSpan.textContent = targetChar;
-      mirrorDiv.appendChild(charSpan);
-
-      if (targetChar === '\n') {
-        const nextProbe = document.createElement('span');
-        nextProbe.textContent = '\u200b';
-        mirrorDiv.appendChild(nextProbe);
-        targetX = nextProbe.offsetLeft;
-        targetY = nextProbe.offsetTop;
       } else {
-        targetX = charSpan.offsetLeft + charSpan.offsetWidth;
-        targetY = charSpan.offsetTop;
+        const preText = fullVal.substring(0, targetCharIdx);
+        const targetChar = fullVal.charAt(targetCharIdx);
+
+        mirrorDiv.appendChild(document.createTextNode(preText));
+        const charSpan = document.createElement('span');
+        charSpan.textContent = targetChar;
+        mirrorDiv.appendChild(charSpan);
+
+        if (targetChar === '\n') {
+          const nextProbe = document.createElement('span');
+          nextProbe.textContent = '\u200b';
+          mirrorDiv.appendChild(nextProbe);
+          targetX = nextProbe.offsetLeft;
+          targetY = nextProbe.offsetTop;
+        } else {
+          targetX = charSpan.offsetLeft + charSpan.offsetWidth;
+          targetY = charSpan.offsetTop;
+        }
+
+        el.style.left = targetX + 'px';
+        el.style.top = targetY + 'px';
+        el.style.height = fontHeight + 'px';
+        el.style.zoom = scaleVal;
+        el.style.display = 'block';
       }
 
-      el.style.left = targetX + 'px';
-      el.style.top = targetY + 'px';
-      el.style.height = fontHeight + 'px';
-      el.style.zoom = scaleVal;
-      el.style.display = 'block';
+      // 🌟 呈現 1:1 等大原地即時打字流
+      if (item.typingText && item.typingText.trim().length > 0) {
+        item.ghostElement.innerText = item.typingText;
+        item.ghostElement.style.display = 'inline-block';
+      } else {
+        item.ghostElement.innerText = '';
+        item.ghostElement.style.display = 'none';
+      }
     }
 
     function redrawAllRemoteCursors() {
