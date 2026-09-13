@@ -539,7 +539,6 @@
       🎙️ 語音辨識
     </button>
 
-    <!-- 🌟 底色切換（支援廣播大螢幕同步） -->
     <div class="control-group" style="background: #27272a; padding: 3px 8px; border-radius: 6px; border: 1px solid #38bdf8;">
       <label for="themeSelect" style="font-weight: bold; color: #38bdf8;">🎨 編輯區底色：</label>
       <select id="themeSelect" onchange="changeTheme(this.value)" style="font-weight: bold; cursor: pointer; color: #fff;">
@@ -690,16 +689,17 @@
     let currentMasterSid = null;
     let isComposing = false;
 
-    let docVersion = 0;
-    let committedText = "";
-    const pendingRemoteQueue = [];
+    // 🌟 Google Docs 級客戶端狀態機（In-Flight & Buffer 雙隊列）
+    let serverVersion = 0;
+    let inFlightOp = null;  // 正在發送給伺服器等待 ACK 的操作
+    let bufferOps = [];     // 飛行期間本機產生的緩衝操作
+    let lastKnownText = ""; // 本機當前基準純文字
 
     const remoteCursors = new Map();
     const audienceUrl = window.location.origin + '/view/' + roomId;
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
 
-    // 🌟 切換主題並廣播至觀眾投影端
     function changeTheme(themeName) {
       document.body.setAttribute('data-theme', themeName);
       try { localStorage.setItem('STT_PREFERRED_THEME', themeName); } catch(e) {}
@@ -753,11 +753,11 @@
           if (restoreConfirm) {
             const clean = savedData.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
             editor.value = clean;
-            committedText = clean;
+            lastKnownText = clean;
             editor.setSelectionRange(clean.length, clean.length);
             socket.emit('client_operation', {
               room: roomId,
-              base_version: docVersion,
+              base_version: serverVersion,
               ops: [{ type: 'insert', pos: 0, text: clean }]
             });
             updateWordCount();
@@ -778,13 +778,15 @@
       
       if (confirm(warningMsg)) {
         editor.value = '';
-        committedText = '';
+        lastKnownText = '';
+        inFlightOp = null;
+        bufferOps = [];
         editor.setSelectionRange(0, 0);
         try { localStorage.removeItem(LOCAL_BACKUP_KEY); } catch(e) {}
         
         socket.emit('client_operation', {
           room: roomId,
-          base_version: docVersion,
+          base_version: serverVersion,
           is_clear: true
         });
 
@@ -846,8 +848,10 @@
       if (!data) return;
       const clean = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       editor.value = clean;
-      committedText = clean;
-      docVersion = data.version || 0;
+      lastKnownText = clean;
+      serverVersion = data.version || 0;
+      inFlightOp = null;
+      bufferOps = [];
       updateWordCount();
       updateEndLinePosition();
 
@@ -898,6 +902,7 @@
       socket.emit('claim_master', { room: roomId });
     }
 
+    // 🌟 本地動作精確差量提取
     function getAtomicOps(oldText, newText) {
       if (oldText === newText) return [];
       let prefix = 0;
@@ -923,92 +928,169 @@
       return ops;
     }
 
-    function emitLocalChanges() {
+    // 🌟 核心：Google Docs 級客戶端隊列控制器
+    function handleLocalTyping() {
       const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      if (editor.value !== currentText) {
-        editor.value = currentText;
-      }
-      if (currentText === committedText) return;
+      if (editor.value !== currentText) editor.value = currentText;
 
-      const ops = getAtomicOps(committedText, currentText);
-      if (ops.length > 0) {
-        socket.emit('client_operation', {
-          room: roomId,
-          base_version: docVersion,
-          ops: ops
-        });
-        committedText = currentText;
+      if (currentText === lastKnownText) return;
+
+      const ops = getAtomicOps(lastKnownText, currentText);
+      lastKnownText = currentText;
+
+      if (ops.length === 0) return;
+
+      for (const op of ops) {
+        if (inFlightOp === null) {
+          // 狀態 1：無在途操作，直接以當前 serverVersion 送出
+          inFlightOp = op;
+          socket.emit('client_operation', {
+            room: roomId,
+            base_version: serverVersion,
+            ops: [op]
+          });
+        } else {
+          // 狀態 2：已有在途操作，將新操作依序推入本機 Buffer 緩衝區，絕不在舊版本搶發！
+          bufferOps.push(op);
+        }
       }
+
       updateWordCount();
       updateEndLinePosition();
       saveToLocalBlackbox();
     }
 
+    // 伺服器 ACK 回應：解鎖在途狀態，並將 Buffer 中的累積字元打包送出
     socket.on('ack_operation', data => {
-      docVersion = data.version;
+      serverVersion = data.version;
+      inFlightOp = null;
+
+      if (bufferOps.length > 0) {
+        // 取出緩衝區所有的字一次性發送給伺服器推進
+        const opsToSend = bufferOps;
+        bufferOps = [];
+        inFlightOp = { type: 'batch', count: opsToSend.length };
+        socket.emit('client_operation', {
+          room: roomId,
+          base_version: serverVersion,
+          ops: opsToSend
+        });
+      }
     });
 
+    // 🌟 核心：OT 坐標轉換函數（保證字元自動向後推移）
+    function transformOp(op1, op2, priority) {
+      if (!op1 || !op2) return op1;
+      const t1 = op1.type, p1 = op1.pos;
+      const t2 = op2.type, p2 = op2.pos;
+
+      if (t1 === 'insert' && t2 === 'insert') {
+        const l2 = op2.text.length;
+        if (p1 < p2 || (p1 === p2 && priority === 'left')) {
+          return { type: 'insert', pos: p1, text: op1.text };
+        } else {
+          return { type: 'insert', pos: p1 + l2, text: op1.text };
+        }
+      } else if (t1 === 'insert' && t2 === 'delete') {
+        const l2 = op2.len;
+        if (p1 <= p2) return { type: 'insert', pos: p1, text: op1.text };
+        else if (p1 >= p2 + l2) return { type: 'insert', pos: p1 - l2, text: op1.text };
+        else return { type: 'insert', pos: p2, text: op1.text };
+      } else if (t1 === 'delete' && t2 === 'insert') {
+        const l1 = op1.len, l2 = op2.text.length;
+        if (p1 + l1 <= p2) return { type: 'delete', pos: p1, len: l1 };
+        else if (p1 >= p2) return { type: 'delete', pos: p1 + l2, len: l1 };
+        else return { type: 'delete', pos: p1, len: l1 + l2 };
+      } else if (t1 === 'delete' && t2 === 'delete') {
+        const l1 = op1.len, l2 = op2.len;
+        if (p1 + l1 <= p2) return { type: 'delete', pos: p1, len: l1 };
+        else if (p1 >= p2 + l2) return { type: 'delete', pos: p1 - l2, len: l1 };
+        else {
+          const start = Math.max(p1, p2);
+          const end = Math.min(p1 + l1, p2 + l2);
+          const newLen = l1 - (end - start);
+          if (newLen <= 0) return null;
+          return { type: 'delete', pos: Math.min(p1, p2), len: newLen };
+        }
+      }
+      return op1;
+    }
+
+    // 🌟 接收搭檔的遠端動作：雙向坐標交叉推移，字元自動往後推，絕對不壓字！
     socket.on('remote_operation', data => {
       if (!data || data.sender_sid === socket.id) return;
 
       if (data.is_clear) {
         editor.value = '';
-        committedText = '';
-        docVersion = data.version;
+        lastKnownText = '';
+        serverVersion = data.version;
+        inFlightOp = null;
+        bufferOps = [];
         updateWordCount();
         updateEndLinePosition();
         return;
       }
 
-      if (isComposing) {
-        pendingRemoteQueue.push(data);
-        return;
-      }
+      serverVersion = data.version;
+      const remoteOps = data.ops || [];
 
-      applyRemoteOps(data);
-    });
+      for (let rOp of remoteOps) {
+        let transformedRemote = rOp;
 
-    function applyRemoteOps(data) {
-      docVersion = data.version;
-      const ops = data.ops || [];
+        // 1. 搭檔的字先與我飛行中的操作進行交叉坐標推移
+        if (inFlightOp && inFlightOp.type !== 'batch') {
+          transformedRemote = transformOp(transformedRemote, inFlightOp, 'right');
+          inFlightOp = transformOp(inFlightOp, rOp, 'left');
+        }
 
-      let curStart = editor.selectionStart;
-      let curEnd = editor.selectionEnd;
+        // 2. 搭檔的字再與我緩衝區的操作進行交叉推移
+        const newBuffer = [];
+        for (let bOp of bufferOps) {
+          if (transformedRemote) {
+            const nextBufferOp = transformOp(bOp, transformedRemote, 'left');
+            transformedRemote = transformOp(transformedRemote, bOp, 'right');
+            if (nextBufferOp) newBuffer.push(nextBufferOp);
+          } else {
+            newBuffer.push(bOp);
+          }
+        }
+        bufferOps = newBuffer;
 
-      const savedScrollTop = editor.scrollTop;
-
-      for (const op of ops) {
-        if (op.type === 'insert') {
-          const insertText = op.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-          const p = Math.min(op.pos, editor.value.length);
-          editor.setRangeText(insertText, p, p, 'preserve');
-          if (p <= curStart) curStart += insertText.length;
-          if (p < curEnd) curEnd += insertText.length;
-
-        } else if (op.type === 'delete') {
-          const p = Math.min(op.pos, editor.value.length);
-          const endP = Math.min(p + op.len, editor.value.length);
-          editor.setRangeText('', p, endP, 'preserve');
-          if (endP <= curStart) curStart -= (endP - p);
-          if (endP <= curEnd) curEnd -= (endP - p);
+        // 3. 將最終計算完成的非碰撞坐標注入本地 DOM，自動將後方的字往後推移
+        if (transformedRemote) {
+          applyOpToDOM(transformedRemote);
         }
       }
-
-      committedText = editor.value;
-      editor.setSelectionRange(curStart, curEnd);
-
-      editor.scrollTop = savedScrollTop;
 
       updateWordCount();
       updateEndLinePosition();
       saveToLocalBlackbox();
-    }
+    });
 
-    function flushPendingQueue() {
-      while (pendingRemoteQueue.length > 0) {
-        const item = pendingRemoteQueue.shift();
-        applyRemoteOps(item);
+    function applyOpToDOM(op) {
+      let curStart = editor.selectionStart;
+      let curEnd = editor.selectionEnd;
+      const savedScrollTop = editor.scrollTop;
+
+      if (op.type === 'insert') {
+        const insertText = op.text;
+        const p = Math.min(op.pos, editor.value.length);
+        // 使用原生微創插入
+        editor.setRangeText(insertText, p, p, 'preserve');
+        // 若搭檔插入在我前面，我的游標與選區平滑向後順移；若在我後面，游標絕對咬死原地
+        if (p <= curStart) curStart += insertText.length;
+        if (p < curEnd) curEnd += insertText.length;
+      } else if (op.type === 'delete') {
+        const p = Math.min(op.pos, editor.value.length);
+        const endP = Math.min(p + op.len, editor.value.length);
+        editor.setRangeText('', p, endP, 'preserve');
+        if (endP <= curStart) curStart -= (endP - p);
+        if (endP <= curEnd) curEnd -= (endP - p);
       }
+
+      lastKnownText = editor.value;
+      editor.setSelectionRange(curStart, curEnd);
+      editor.scrollTop = savedScrollTop; // 視野固定，不亂跳
     }
 
     let lastBroadcastTyping = '';
@@ -1038,14 +1120,13 @@
           if (e.data) broadcastLiveTyping(e.data);
           return;
         }
-        emitLocalChanges();
+        handleLocalTyping();
       });
       
       editor.addEventListener('compositionend', () => {
         isComposing = false;
         broadcastLiveTyping('');
-        emitLocalChanges();
-        flushPendingQueue();
+        handleLocalTyping();
       });
 
       editor.addEventListener('click', broadcastCursorOnly);
@@ -1247,7 +1328,7 @@
 
     socket.on('sync_settings', data => {
       if (data && !amIMaster) {
-        // 協作員端維持個人獨立設定
+        // 協作員端保持個人獨立自訂視圖
       }
     });
     
@@ -1463,7 +1544,7 @@
       if (!deltaText) return;
       const endPos = editor.value.length;
       editor.setRangeText(deltaText, endPos, endPos, 'end');
-      emitLocalChanges();
+      handleLocalTyping();
     }
 
     async function toggleAISpeech() {
