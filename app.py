@@ -20,7 +20,7 @@ def schedule_room_cleanup(room_id):
 
     def cleanup_job():
         if room_id in rooms:
-            total_connected = len(rooms[room_id].get("editors", set())) + len(rooms[room_id].get("viewers", set()))
+            total_connected = len(rooms[room_id].get("editors", {})) + len(rooms[room_id].get("viewers", set()))
             if total_connected == 0:
                 print(f"[自動清理] 房間 {room_id} 閒置達 30 分鐘，釋放記憶體。")
                 rooms.pop(room_id, None)
@@ -38,7 +38,6 @@ def cancel_room_cleanup(room_id):
         timer.cancel()
 
 
-# 🌟 Google Docs 級原子轉換
 def transform_primitive(op1, op2, priority):
     if not op1 or not op2:
         return op1
@@ -127,6 +126,7 @@ def new_room():
 def handle_join(data):
     room_id = data.get('room')
     is_editor = data.get('is_editor', False)
+    client_id = data.get('client_id') or request.sid
     sid = request.sid
     if not room_id:
         return
@@ -139,17 +139,18 @@ def handle_join(data):
             "version": 0,
             "history": [],
             "settings": {"theme": "dark", "size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
-            "master_sid": None,
-            "editors": set(),
+            "master_client_id": None,
+            "editors": {},  # { client_id: sid } 唯一對應！
             "viewers": set()
         }
 
     join_room(room_id)
 
     if is_editor:
-        rooms[room_id]["editors"].add(sid)
-        if rooms[room_id]["master_sid"] is None:
-            rooms[room_id]["master_sid"] = sid
+        # 🌟 唯一身分覆寫：同一台電腦重連只會更新 sid，絕對不增加新使用者
+        rooms[room_id]["editors"][client_id] = sid
+        if rooms[room_id]["master_client_id"] is None:
+            rooms[room_id]["master_client_id"] = client_id
     else:
         rooms[room_id]["viewers"].add(sid)
 
@@ -165,6 +166,7 @@ def handle_join(data):
 @socketio.on('client_operation')
 def handle_client_operation(data):
     room_id = data.get('room')
+    client_id = data.get('client_id') or request.sid
     sid = request.sid
     if not room_id or room_id not in rooms:
         return
@@ -183,7 +185,7 @@ def handle_client_operation(data):
             'version': rdata["version"],
             'is_clear': True,
             'full_text': '',
-            'sender_sid': sid
+            'client_id': client_id
         }, to=room_id, include_self=False)
         emit('ack_operation', {'version': rdata["version"]}, to=sid)
         return
@@ -219,39 +221,29 @@ def handle_client_operation(data):
             'version': rdata["version"],
             'ops': transformed_ops,
             'full_text': rdata["text"],
-            'sender_sid': sid
+            'client_id': client_id
         }, to=room_id, include_self=False)
 
 
-# 🌟 協作員打字即時推移：敲注音或選字時，即刻推擠協作夥伴畫面，把字往後推
-@socketio.on('live_composing_stream')
-def handle_live_composing_stream(data):
-    room_id = data.get('room')
-    sid = request.sid
-    if room_id in rooms:
-        emit('remote_composing_stream', {
-            'sid': sid,
-            'pos': data.get('pos', 0),
-            'composing_text': data.get('composing_text', '')
-        }, to=room_id, include_self=False)
-
-
+# 🌟 游標移動：以唯一的 client_id 廣播，一人永遠只有一根游標
 @socketio.on('cursor_move')
 def handle_cursor_move(data):
     room_id = data.get('room')
-    sid = request.sid
-    if room_id in rooms:
-        emit('cursor_update', {
-            'sid': sid,
-            'cursor_index': data.get('cursor_index', 0)
-        }, to=room_id, include_self=False)
+    client_id = data.get('client_id')
+    if not client_id or not room_id or room_id not in rooms:
+        return
+
+    emit('cursor_update', {
+        'client_id': client_id,
+        'cursor_index': data.get('cursor_index', 0)
+    }, to=room_id, include_self=False)
 
 
 @socketio.on('update_settings')
 def handle_update_settings(data):
     room_id = data.get('room')
-    sid = request.sid
-    if room_id in rooms and sid == rooms[room_id].get("master_sid"):
+    client_id = data.get('client_id')
+    if room_id in rooms and client_id == rooms[room_id].get("master_client_id"):
         rooms[room_id]["settings"]["theme"] = data.get('theme', 'dark')
         rooms[room_id]["settings"]["size"] = data.get('size', 48)
         rooms[room_id]["settings"]["scale"] = data.get('scale', 100)
@@ -263,9 +255,9 @@ def handle_update_settings(data):
 @socketio.on('claim_master')
 def handle_claim_master(data):
     room_id = data.get('room')
-    sid = request.sid
-    if room_id in rooms and sid in rooms[room_id]["editors"]:
-        rooms[room_id]["master_sid"] = sid
+    client_id = data.get('client_id')
+    if room_id in rooms and client_id in rooms[room_id]["editors"]:
+        rooms[room_id]["master_client_id"] = client_id
         broadcast_roles_status(room_id)
 
 
@@ -275,13 +267,21 @@ def handle_disconnect():
     for room_id, rdata in list(rooms.items()):
         modified = False
 
-        if sid in rdata["editors"]:
-            rdata["editors"].remove(sid)
-            modified = True
-            emit('cursor_remove', {'sid': sid}, to=room_id)
+        # 找尋斷線的 client_id
+        disconnected_cid = None
+        for cid, csid in list(rdata["editors"].items()):
+            if csid == sid:
+                disconnected_cid = cid
+                break
 
-            if rdata["master_sid"] == sid:
-                rdata["master_sid"] = next(iter(rdata["editors"])) if rdata["editors"] else None
+        if disconnected_cid:
+            rdata["editors"].pop(disconnected_cid, None)
+            modified = True
+            # 立即廣播拔除該使用者的游標
+            emit('cursor_remove', {'client_id': disconnected_cid}, to=room_id)
+
+            if rdata["master_client_id"] == disconnected_cid:
+                rdata["master_client_id"] = next(iter(rdata["editors"])) if rdata["editors"] else None
 
         if sid in rdata["viewers"]:
             rdata["viewers"].remove(sid)
@@ -298,9 +298,11 @@ def broadcast_roles_status(room_id):
     if room_id not in rooms:
         return
     rdata = rooms[room_id]
+    active_cids = list(rdata["editors"].keys())
     socketio.emit('role_status_update', {
-        "master_sid": rdata["master_sid"],
-        "total_editors": len(rdata["editors"]),
+        "master_client_id": rdata["master_client_id"],
+        "total_editors": len(active_cids),
+        "active_editors": active_cids,
         "total_viewers": len(rdata["viewers"])
     }, to=room_id)
 
