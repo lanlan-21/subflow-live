@@ -10,11 +10,11 @@ app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 記憶體文件狀態與歷史版本記錄
+# 伺服器端資料庫：保存全域文字、版本、OT 歷史隊列與房間設定
 rooms = {}
 
 cleanup_timers = {}
-CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘無人連線自動清理釋放 RAM
+CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘無人連線自動清理釋放記憶體
 
 
 def schedule_room_cleanup(room_id):
@@ -24,7 +24,7 @@ def schedule_room_cleanup(room_id):
         if room_id in rooms:
             total_connected = len(rooms[room_id].get("editors", set())) + len(rooms[room_id].get("viewers", set()))
             if total_connected == 0:
-                print(f"[自動清理] 房間 {room_id} 閒置達 30 分鐘，釋放記憶體。")
+                print(f"[自動清理] 房間 {room_id} 閒置達 30 分鐘，清空記憶體釋放資源。")
                 rooms.pop(room_id, None)
         cleanup_timers.pop(room_id, None)
 
@@ -40,7 +40,7 @@ def cancel_room_cleanup(room_id):
         timer.cancel()
 
 
-# 🌟 Google Docs 級 OT 坐標轉換：同秒打字或換行時各自平移保留，絕不疊字吃字
+# 🌟 Google Docs 級 OT（Operational Transformation）演算法
 def transform_op(op, against):
     t_type = op['type']
     a_type = against['type']
@@ -150,6 +150,7 @@ def handle_join(data):
 
     join_room(room_id)
 
+    # 嚴格區分身分：只有工作台協作員才能成為 master_sid，大螢幕絕對為純唯讀
     if is_editor:
         rooms[room_id]["editors"].add(sid)
         if rooms[room_id]["master_sid"] is None:
@@ -191,7 +192,7 @@ def handle_client_operation(data):
         emit('ack_operation', {'version': rdata["version"]}, to=sid)
         return
 
-    # 換行字元統一正規化為單一字元 \n，跨系統長度絕對精確
+    # 換行統一標準化為單一字元 \n，長度索引零誤差
     ops = []
     for op in raw_ops:
         if op.get('type') == 'insert':
@@ -235,6 +236,7 @@ def handle_update_settings(data):
         rooms[room_id]["settings"]["scale"] = data.get('scale', 100)
         rooms[room_id]["settings"]["pad_x"] = data.get('pad_x', 8)
         rooms[room_id]["settings"]["pad_y"] = data.get('pad_y', 10)
+        # 廣播大螢幕與搭檔同步縮放
         emit('sync_settings', rooms[room_id]["settings"], to=room_id, include_self=False)
 
 
