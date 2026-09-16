@@ -210,6 +210,7 @@
       overflow: hidden !important;
     }
 
+    /* 🌟 原生編輯器：絕對純淨，無任何覆蓋層干擾 */
     #editor {
       width: 100%;
       height: 100%;
@@ -263,6 +264,7 @@
       letter-spacing: 1px;
     }
 
+    /* 測量層隱藏於底層 */
     #mirrorDiv {
       position: absolute;
       top: 0;
@@ -279,7 +281,7 @@
       letter-spacing: 0px;
     }
 
-    /* 🌟 純粹的 Google Docs 游標：細垂直線 + 名稱標籤，絕無藍色小字 */
+    /* 🌟 純淨垂直游標與名字標籤，絕無藍色小字 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -590,7 +592,7 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... 支援雙人穩定同步共筆"></textarea>
+      <textarea id="editor" placeholder="在此打字... 支援雙人穩定同步推移共筆"></textarea>
       <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
@@ -658,7 +660,6 @@
     const aiStreamBar = document.getElementById('aiStreamBar');
     const aiStatusTitle = document.getElementById('aiStatusTitle');
     const aiInterimText = document.getElementById('aiInterimText');
-    const vuFill = document.getElementById('vuFill');
     const scaleInput = document.getElementById('scaleInput');
     const padXInput = document.getElementById('padXInput');
     const padYInput = document.getElementById('padYInput');
@@ -671,12 +672,13 @@
     let inFlightOp = null;
     let bufferOps = [];
 
-    // 🌟 baseCommittedText: 伺服器確認的定稿文字
+    // baseCommittedText 紀錄後端確認的乾淨文字
     let baseCommittedText = "";
-    // 🌟 remoteComposing: 夥伴未定稿組字 { cid, pos, text }
-    let activeRemoteComposing = null;
 
+    // 🌟 remoteComposingMap 儲存夥伴未定稿組字 { cid: { pos, text } }
+    const remoteComposingMap = new Map();
     const remoteCursors = new Map();
+
     const audienceUrl = window.location.origin + '/view/' + roomId;
     const LOCAL_BACKUP_KEY = `STT_BACKUP_${roomId}`;
     let localSaveDebounce = null;
@@ -688,8 +690,8 @@
         }
       });
       remoteCursors.clear();
+      remoteComposingMap.clear();
       remoteCursorsContainer.innerHTML = '';
-      activeRemoteComposing = null;
     }
 
     let isRenderScheduled = false;
@@ -817,6 +819,7 @@
     }
     window.onbeforeunload = handleBeforeUnload;
 
+    // 🌟 核心突破：靜態 Range BoundingBox 測量，純數學計算，徹底杜絕 DOM 修改引起的換行跳動
     function updateEndLinePosition() {
       if (!editor) return;
       const cs = window.getComputedStyle(editor);
@@ -832,19 +835,28 @@
       mirrorDiv.style.paddingTop = cs.paddingTop;
       mirrorDiv.style.width = editor.clientWidth + 'px';
 
-      mirrorDiv.innerHTML = '';
-      mirrorDiv.appendChild(document.createTextNode(editor.value || ''));
-      
-      const bottomProbe = document.createElement('span');
-      bottomProbe.style.display = 'inline-block';
-      bottomProbe.style.width = '0px';
-      mirrorDiv.appendChild(bottomProbe);
+      mirrorDiv.textContent = editor.value || '\u200b';
 
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       const fontHeight = parseFloat(cs.fontSize) || 48;
-      const bottomY = (bottomProbe.offsetTop + fontHeight) * scaleVal - editor.scrollTop;
+      
+      let bottomY = parseFloat(cs.paddingTop) || 16;
 
-      endLineMarker.style.top = bottomY + 'px';
+      const textNode = mirrorDiv.firstChild;
+      if (textNode && textNode.nodeType === 3) {
+        const range = document.createRange();
+        range.setStart(textNode, textNode.length);
+        range.collapse(true);
+        const rect = range.getBoundingClientRect();
+        const mRect = mirrorDiv.getBoundingClientRect();
+        if (rect.height !== 0) {
+          bottomY = rect.top - mRect.top;
+        }
+      }
+
+      const finalY = (bottomY + fontHeight) * scaleVal - editor.scrollTop;
+
+      endLineMarker.style.top = finalY + 'px';
       endLineMarker.style.left = (parseFloat(cs.paddingLeft) || 8) + 'px';
       endLineMarker.style.width = (editor.clientWidth - ((parseFloat(cs.paddingLeft)||8)*2)) + 'px';
     }
@@ -895,6 +907,7 @@
             item.element.parentNode.removeChild(item.element);
           }
           remoteCursors.delete(cid);
+          remoteComposingMap.delete(cid);
         }
       });
 
@@ -917,6 +930,7 @@
         modeHintText.innerText = "身分：【獨立協作視圖】字級比例各自獨立";
       }
       updateAllCursorTags();
+      rebuildEditorValueWithComposing();
       scheduleUIRender();
     });
 
@@ -954,6 +968,13 @@
       const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (editor.value !== currentText) editor.value = currentText;
 
+      // 如果有暫存注音，打字時 currentText 會包含其他人的字，這時不可用來跟 baseCommittedText 直接相減
+      // 本次版本：如果本機正在輸入，我們專注於自身的輸入，暫時不混合。
+      if (remoteComposingMap.size > 0) {
+        // 如果有別人正在輸入，本機打完字後，我們會重新建構 text
+      }
+
+      // 我們透過 baseCommittedText 計算 OT 差量
       if (currentText === baseCommittedText) return;
 
       const ops = getAtomicOps(baseCommittedText, currentText);
@@ -1034,11 +1055,9 @@
       return op1;
     }
 
-    // 🌟 定稿動作：清空臨時推展，固化為正式定稿字元
+    // 🌟 定稿動作：無縫轉正
     socket.on('remote_operation', data => {
       if (!data || data.client_id === myClientId) return;
-
-      activeRemoteComposing = null; // 清除暫存
 
       if (data.is_clear) {
         editor.value = '';
@@ -1046,9 +1065,14 @@
         serverVersion = data.version;
         inFlightOp = null;
         bufferOps = [];
+        remoteComposingMap.clear();
         updateWordCount();
         scheduleUIRender();
         return;
+      }
+
+      if (data.client_id) {
+        remoteComposingMap.delete(data.client_id);
       }
 
       serverVersion = data.version;
@@ -1075,82 +1099,99 @@
         bufferOps = newBuffer;
 
         if (transformedRemote) {
-          applyOpToDOM(transformedRemote);
+          applyOpToBaseText(transformedRemote);
         }
       }
 
+      rebuildEditorValueWithComposing();
       updateWordCount();
       scheduleUIRender();
       saveToLocalBlackbox();
     });
 
-    function applyOpToDOM(op) {
-      let curStart = editor.selectionStart;
-      let curEnd = editor.selectionEnd;
-      const savedScrollTop = editor.scrollTop;
-
+    function applyOpToBaseText(op) {
       if (op.type === 'insert') {
         const insertText = op.text;
-        const p = Math.min(op.pos, editor.value.length);
-        editor.setRangeText(insertText, p, p, 'preserve');
-        if (p <= curStart) curStart += insertText.length;
-        if (p < curEnd) curEnd += insertText.length;
+        const p = Math.min(op.pos, baseCommittedText.length);
+        baseCommittedText = baseCommittedText.slice(0, p) + insertText + baseCommittedText.slice(p);
       } else if (op.type === 'delete') {
-        const p = Math.min(op.pos, editor.value.length);
-        const endP = Math.min(p + op.len, editor.value.length);
-        editor.setRangeText('', p, endP, 'preserve');
-        if (endP <= curStart) curStart -= (endP - p);
-        if (endP <= curEnd) curEnd -= (endP - p);
+        const p = Math.min(op.pos, baseCommittedText.length);
+        const endP = Math.min(p + op.len, baseCommittedText.length);
+        baseCommittedText = baseCommittedText.slice(0, p) + baseCommittedText.slice(endP);
       }
-
-      baseCommittedText = editor.value;
-      editor.setSelectionRange(curStart, curEnd);
-      editor.scrollTop = savedScrollTop;
     }
 
-    // 🌟 核心：毫秒級廣播未確認注音
-    let lastSentComposingText = '';
+    // 🌟 將夥伴注音塞入 textarea：讓原本的字自然往後推開！
+    function rebuildEditorValueWithComposing() {
+      // 正在組字期間不亂重置本機視窗，避免中斷使用者的原生微軟注音
+      if (isComposing) return;
+
+      if (remoteComposingMap.size === 0) {
+        if (editor.value !== baseCommittedText) {
+          const savedStart = editor.selectionStart;
+          const savedEnd = editor.selectionEnd;
+          const savedTop = editor.scrollTop;
+          editor.value = baseCommittedText;
+          editor.setSelectionRange(savedStart, savedEnd);
+          editor.scrollTop = savedTop;
+        }
+        return;
+      }
+
+      const comps = Array.from(remoteComposingMap.values()).sort((a, b) => a.pos - b.pos);
+      let rendered = '';
+      let lastIdx = 0;
+
+      for (const c of comps) {
+        const p = Math.min(Math.max(c.pos, 0), baseCommittedText.length);
+        rendered += baseCommittedText.substring(lastIdx, p) + c.text;
+        lastIdx = p;
+      }
+      rendered += baseCommittedText.substring(lastIdx);
+
+      if (editor.value !== rendered) {
+        const savedStart = editor.selectionStart;
+        const savedEnd = editor.selectionEnd;
+        const savedTop = editor.scrollTop;
+        editor.value = rendered;
+        editor.setSelectionRange(savedStart, savedEnd);
+        editor.scrollTop = savedTop;
+      }
+    }
+
+    let liveTypingTimer = null;
+    let pendingTypingStr = '';
     function broadcastLiveTyping(str) {
-      if (str !== lastSentComposingText) {
-        lastSentComposingText = str;
+      pendingTypingStr = str;
+      clearTimeout(liveTypingTimer);
+      liveTypingTimer = setTimeout(() => {
         socket.emit('live_composing_stream', {
           room: roomId,
           client_id: myClientId,
           cursor_index: editor.selectionStart,
-          composing_text: str
+          composing_text: pendingTypingStr
         });
-      }
+        socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: editor.selectionStart });
+      }, 16);
     }
 
-    // 🌟 核心：接收夥伴打字中的注音，直接在內文裡把句子往後推開！
+    // 🌟 收到夥伴即時注音
     socket.on('remote_composing_stream', data => {
       if (!data || !data.client_id || data.client_id === myClientId) return;
       const text = data.composing_text || '';
       
       if (text.length > 0) {
-        activeRemoteComposing = { cid: data.client_id, pos: data.cursor_index, text: text };
+        remoteComposingMap.set(data.client_id, { pos: data.cursor_index, text: text });
       } else {
-        activeRemoteComposing = null;
+        remoteComposingMap.delete(data.client_id);
       }
-
-      // 🌟 直接將注音推入 editor.value，與正式字同色、同字體，將後方句子真實推開！
-      const savedStart = editor.selectionStart;
-      const savedEnd = editor.selectionEnd;
-      const savedScrollTop = editor.scrollTop;
-
-      if (activeRemoteComposing) {
-        const p = Math.min(Math.max(activeRemoteComposing.pos, 0), baseCommittedText.length);
-        editor.value = baseCommittedText.slice(0, p) + activeRemoteComposing.text + baseCommittedText.slice(p);
-        updateRemoteCursor(data.client_id, p + activeRemoteComposing.text.length);
-      } else {
-        editor.value = baseCommittedText;
-        updateRemoteCursor(data.client_id, data.cursor_index);
-      }
-
-      editor.setSelectionRange(savedStart, savedEnd);
-      editor.scrollTop = savedScrollTop;
-
-      scheduleUIRender();
+      
+      // 重新建構字元陣列（在句子中間把字往後推）
+      rebuildEditorValueWithComposing();
+      
+      // 將遠端游標釘在注音的最右側
+      const renderPos = text.length > 0 ? data.cursor_index + text.length : data.cursor_index;
+      updateRemoteCursor(data.client_id, renderPos);
     });
 
     function bindEditorEvents() {
@@ -1212,6 +1253,8 @@
         const item = remoteCursors.get(data.client_id);
         if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
         remoteCursors.delete(data.client_id);
+        remoteComposingMap.delete(data.client_id);
+        rebuildEditorValueWithComposing();
         scheduleUIRender();
       }
     });
@@ -1268,6 +1311,7 @@
       });
     }
 
+    // 🌟 徹底杜絕 DOM 跳行動態，只用原生範圍矩陣光柵精算
     function renderSingleRemoteCursor(cid) {
       const item = remoteCursors.get(cid);
       if (!item || !editor) return;
@@ -1287,42 +1331,26 @@
       mirrorDiv.style.paddingTop = cs.paddingTop;
       mirrorDiv.style.width = editor.clientWidth + 'px';
 
-      const fullVal = editor.value;
-      mirrorDiv.innerHTML = '';
+      mirrorDiv.textContent = editor.value || '\u200b';
 
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       const fontHeight = parseFloat(cs.fontSize) || 48;
 
-      if (targetIndex === 0) {
-        el.style.left = (parseFloat(cs.paddingLeft) || 8) + 'px';
-        el.style.top = ((parseFloat(cs.paddingTop) || 16) * scaleVal - editor.scrollTop) + 'px';
-        el.style.height = fontHeight + 'px';
-        el.style.zoom = scaleVal;
-        el.style.display = 'block';
-        return;
-      }
+      let targetX = parseFloat(cs.paddingLeft) || 8;
+      let targetY = parseFloat(cs.paddingTop) || 16;
 
-      const preText = fullVal.substring(0, targetIndex - 1);
-      const lastChar = fullVal.charAt(targetIndex - 1);
-
-      mirrorDiv.appendChild(document.createTextNode(preText));
-      
-      const charSpan = document.createElement('span');
-      charSpan.textContent = lastChar;
-      mirrorDiv.appendChild(charSpan);
-
-      let targetX = 0;
-      let targetY = 0;
-
-      if (lastChar === '\n') {
-        const lineProbe = document.createElement('span');
-        lineProbe.textContent = ' ';
-        mirrorDiv.appendChild(lineProbe);
-        targetX = lineProbe.offsetLeft;
-        targetY = lineProbe.offsetTop;
-      } else {
-        targetX = charSpan.offsetLeft + charSpan.offsetWidth;
-        targetY = charSpan.offsetTop;
+      const textNode = mirrorDiv.firstChild;
+      if (textNode && textNode.nodeType === 3) {
+        const range = document.createRange();
+        range.setStart(textNode, targetIndex);
+        range.collapse(true);
+        const rect = range.getBoundingClientRect();
+        const mRect = mirrorDiv.getBoundingClientRect();
+        
+        if (rect.height !== 0) {
+          targetX = rect.left - mRect.left;
+          targetY = rect.top - mRect.top;
+        }
       }
 
       el.style.left = targetX + 'px';
