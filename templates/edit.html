@@ -210,7 +210,7 @@
       overflow: hidden !important;
     }
 
-    /* 🌟 原生編輯器：絕對純淨，無任何覆蓋層干擾 */
+    /* 🌟 原生編輯器：絕對純淨，無任何覆蓋層干擾，所見即所得 */
     #editor {
       width: 100%;
       height: 100%;
@@ -264,7 +264,6 @@
       letter-spacing: 1px;
     }
 
-    /* 測量層隱藏於底層 */
     #mirrorDiv {
       position: absolute;
       top: 0;
@@ -281,7 +280,7 @@
       letter-spacing: 0px;
     }
 
-    /* 🌟 純淨垂直游標與名字標籤，絕無藍色小字 */
+    /* 🌟 純淨垂直游標與名字標籤，絕無藍色小字，絕無懸浮氣泡 */
     .remote-cursor {
       position: absolute;
       width: 3px;
@@ -592,7 +591,7 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <textarea id="editor" placeholder="在此打字... 支援雙人穩定同步推移共筆"></textarea>
+      <textarea id="editor" placeholder="在此打字... 支援雙人穩定同步共筆"></textarea>
       <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="mirrorDiv"></div>
       <div id="remoteCursorsContainer"></div>
@@ -637,6 +636,7 @@
   </div>
 
   <script>
+    // 🌟 保證多重游標絕不出現：唯一客戶端身分證
     let myClientId = sessionStorage.getItem('STT_CLIENT_ID');
     if (!myClientId) {
       myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
@@ -819,7 +819,7 @@
     }
     window.onbeforeunload = handleBeforeUnload;
 
-    // 🌟 核心突破：靜態 Range BoundingBox 測量，純數學計算，徹底杜絕 DOM 修改引起的換行跳動
+    // 🌟 核心防消失測量：使用 0 寬度的實體 span 探針，保證最後空行絕對被撐開測量到
     function updateEndLinePosition() {
       if (!editor) return;
       const cs = window.getComputedStyle(editor);
@@ -835,28 +835,21 @@
       mirrorDiv.style.paddingTop = cs.paddingTop;
       mirrorDiv.style.width = editor.clientWidth + 'px';
 
-      mirrorDiv.textContent = editor.value || '\u200b';
+      mirrorDiv.innerHTML = '';
+      mirrorDiv.appendChild(document.createTextNode(editor.value || ''));
+      
+      const bottomProbe = document.createElement('span');
+      bottomProbe.style.display = 'inline-block';
+      bottomProbe.style.width = '0px';
+      // 確保即使最後是空行，這個 span 也能繼承行高，讓 offsetTop 準確抓到最後一行
+      bottomProbe.innerHTML = '&nbsp;'; 
+      mirrorDiv.appendChild(bottomProbe);
 
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       const fontHeight = parseFloat(cs.fontSize) || 48;
-      
-      let bottomY = parseFloat(cs.paddingTop) || 16;
+      const bottomY = (bottomProbe.offsetTop + fontHeight) * scaleVal - editor.scrollTop;
 
-      const textNode = mirrorDiv.firstChild;
-      if (textNode && textNode.nodeType === 3) {
-        const range = document.createRange();
-        range.setStart(textNode, textNode.length);
-        range.collapse(true);
-        const rect = range.getBoundingClientRect();
-        const mRect = mirrorDiv.getBoundingClientRect();
-        if (rect.height !== 0) {
-          bottomY = rect.top - mRect.top;
-        }
-      }
-
-      const finalY = (bottomY + fontHeight) * scaleVal - editor.scrollTop;
-
-      endLineMarker.style.top = finalY + 'px';
+      endLineMarker.style.top = bottomY + 'px';
       endLineMarker.style.left = (parseFloat(cs.paddingLeft) || 8) + 'px';
       endLineMarker.style.width = (editor.clientWidth - ((parseFloat(cs.paddingLeft)||8)*2)) + 'px';
     }
@@ -968,13 +961,11 @@
       const currentText = editor.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
       if (editor.value !== currentText) editor.value = currentText;
 
-      // 如果有暫存注音，打字時 currentText 會包含其他人的字，這時不可用來跟 baseCommittedText 直接相減
-      // 本次版本：如果本機正在輸入，我們專注於自身的輸入，暫時不混合。
-      if (remoteComposingMap.size > 0) {
-        // 如果有別人正在輸入，本機打完字後，我們會重新建構 text
+      // 當我們自己在打字時，暫不拿混入別人注音的字串做比較
+      if (remoteComposingMap.size > 0 && isComposing) {
+        return;
       }
 
-      // 我們透過 baseCommittedText 計算 OT 差量
       if (currentText === baseCommittedText) return;
 
       const ops = getAtomicOps(baseCommittedText, currentText);
@@ -1055,7 +1046,7 @@
       return op1;
     }
 
-    // 🌟 定稿動作：無縫轉正
+    // 🌟 定稿接收
     socket.on('remote_operation', data => {
       if (!data || data.client_id === myClientId) return;
 
@@ -1121,9 +1112,10 @@
       }
     }
 
-    // 🌟 將夥伴注音塞入 textarea：讓原本的字自然往後推開！
+    // 🌟 真正將夥伴注音與正式文字合併，在原生編輯器中直接向後推展！（絕無藍色小字）
     function rebuildEditorValueWithComposing() {
-      // 正在組字期間不亂重置本機視窗，避免中斷使用者的原生微軟注音
+      // 為了保護本機輸入法不被中斷，只有在自己沒有敲注音時，才會看到對方的字把句子推開。
+      // 當雙方同時敲注音時，等一方按下 Enter 才會推展（物理極限的優雅妥協）。
       if (isComposing) return;
 
       if (remoteComposingMap.size === 0) {
@@ -1175,7 +1167,6 @@
       }, 16);
     }
 
-    // 🌟 收到夥伴即時注音
     socket.on('remote_composing_stream', data => {
       if (!data || !data.client_id || data.client_id === myClientId) return;
       const text = data.composing_text || '';
@@ -1186,10 +1177,9 @@
         remoteComposingMap.delete(data.client_id);
       }
       
-      // 重新建構字元陣列（在句子中間把字往後推）
       rebuildEditorValueWithComposing();
       
-      // 將遠端游標釘在注音的最右側
+      // 計算夥伴游標推進的位置
       const renderPos = text.length > 0 ? data.cursor_index + text.length : data.cursor_index;
       updateRemoteCursor(data.client_id, renderPos);
     });
@@ -1260,13 +1250,6 @@
     });
 
     function updateRemoteCursor(cid, cursorIndex) {
-      remoteCursors.forEach((item, oldCid) => {
-        if (oldCid !== cid) {
-          if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
-          remoteCursors.delete(oldCid);
-        }
-      });
-
       let item = remoteCursors.get(cid);
       if (!item) {
         const isTargetMaster = (cid === currentMasterClientId);
@@ -1311,7 +1294,7 @@
       });
     }
 
-    // 🌟 徹底杜絕 DOM 跳行動態，只用原生範圍矩陣光柵精算
+    // 🌟 核心防跳行：文字節點實體邊界光柵測量（絕不加入任何干擾折行的節點）
     function renderSingleRemoteCursor(cid) {
       const item = remoteCursors.get(cid);
       if (!item || !editor) return;
@@ -1335,21 +1318,31 @@
 
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       const fontHeight = parseFloat(cs.fontSize) || 48;
-
+      
       let targetX = parseFloat(cs.paddingLeft) || 8;
       let targetY = parseFloat(cs.paddingTop) || 16;
 
       const textNode = mirrorDiv.firstChild;
-      if (textNode && textNode.nodeType === 3) {
+      
+      if (targetIndex > 0 && textNode && textNode.nodeType === 3) {
+        // 🌟 關鍵邏輯：我們測量「游標前一個字」的右側邊界，它永遠釘死在該行，絕對不可能被折到下一行！
         const range = document.createRange();
-        range.setStart(textNode, targetIndex);
-        range.collapse(true);
+        range.setStart(textNode, targetIndex - 1);
+        range.setEnd(textNode, targetIndex);
         const rect = range.getBoundingClientRect();
         const mRect = mirrorDiv.getBoundingClientRect();
         
         if (rect.height !== 0) {
-          targetX = rect.left - mRect.left;
-          targetY = rect.top - mRect.top;
+          const charStr = textNode.textContent.charAt(targetIndex - 1);
+          // 如果前一個字剛好是換行，游標自然在新行開頭
+          if (charStr === '\n') {
+            targetX = parseFloat(cs.paddingLeft) || 8;
+            targetY = rect.bottom - mRect.top;
+          } else {
+            // 緊緊咬死在前一個字的右側邊緣
+            targetX = rect.right - mRect.left;
+            targetY = rect.top - mRect.top;
+          }
         }
       }
 
