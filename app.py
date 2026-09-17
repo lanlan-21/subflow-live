@@ -12,31 +12,27 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 rooms = {}
 cleanup_timers = {}
-CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘無人連線自動清理釋放記憶體
+CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘無人連線自動清理
 
 
 def schedule_room_cleanup(room_id):
     cancel_room_cleanup(room_id)
-
     def cleanup_job():
         if room_id in rooms:
             total_connected = len(rooms[room_id].get("editors", {})) + len(rooms[room_id].get("viewers", set()))
             if total_connected == 0:
-                print(f"[自動清理] 房間 {room_id} 閒置達 30 分鐘，釋放記憶體。")
+                print(f"[自動清理] 房間 {room_id} 釋放記憶體。")
                 rooms.pop(room_id, None)
         cleanup_timers.pop(room_id, None)
-
     timer = threading.Timer(CLEANUP_TIMEOUT_SECONDS, cleanup_job)
     timer.daemon = True
     cleanup_timers[room_id] = timer
     timer.start()
 
-
 def cancel_room_cleanup(room_id):
     timer = cleanup_timers.pop(room_id, None)
     if timer:
         timer.cancel()
-
 
 def transform_primitive(op1, op2, priority):
     if not op1 or not op2:
@@ -50,7 +46,6 @@ def transform_primitive(op1, op2, priority):
             return {'type': 'insert', 'pos': p1, 'text': op1['text']}
         else:
             return {'type': 'insert', 'pos': p1 + l2, 'text': op1['text']}
-
     elif t1 == 'insert' and t2 == 'delete':
         l2 = op2['len']
         if p1 <= p2:
@@ -59,7 +54,6 @@ def transform_primitive(op1, op2, priority):
             return {'type': 'insert', 'pos': p1 - l2, 'text': op1['text']}
         else:
             return {'type': 'insert', 'pos': p2, 'text': op1['text']}
-
     elif t1 == 'delete' and t2 == 'insert':
         l1 = op1['len']
         l2 = len(op2['text'])
@@ -69,7 +63,6 @@ def transform_primitive(op1, op2, priority):
             return {'type': 'delete', 'pos': p1 + l2, 'len': l1}
         else:
             return {'type': 'delete', 'pos': p1, 'len': l1 + l2}
-
     elif t1 == 'delete' and t2 == 'delete':
         l1, l2 = op1['len'], op2['len']
         if p1 + l1 <= p2:
@@ -84,9 +77,7 @@ def transform_primitive(op1, op2, priority):
             if new_len <= 0:
                 return None
             return {'type': 'delete', 'pos': min(p1, p2), 'len': new_len}
-
     return op1
-
 
 def apply_op_to_text(text, op):
     if not op:
@@ -105,16 +96,13 @@ def apply_op_to_text(text, op):
 def index():
     return render_template('index.html')
 
-
 @app.route('/edit/<room_id>')
 def edit(room_id):
     return render_template('edit.html', room_id=room_id)
 
-
 @app.route('/view/<room_id>')
 def view(room_id):
     return render_template('view.html', room_id=room_id)
-
 
 @app.route('/new_room')
 def new_room():
@@ -224,14 +212,12 @@ def handle_client_operation(data):
         }, to=room_id, include_self=False)
 
 
-# 🌟 核心即時注音串流：打注音尚未按 Enter 時，立即同步廣播位置與字元
 @socketio.on('live_composing_stream')
 def handle_live_composing_stream(data):
     room_id = data.get('room')
     client_id = data.get('client_id')
     if not client_id or not room_id or room_id not in rooms:
         return
-
     emit('remote_composing_stream', {
         'client_id': client_id,
         'cursor_index': data.get('cursor_index', 0),
@@ -245,7 +231,6 @@ def handle_cursor_move(data):
     client_id = data.get('client_id')
     if not client_id or not room_id or room_id not in rooms:
         return
-
     emit('cursor_update', {
         'client_id': client_id,
         'cursor_index': data.get('cursor_index', 0)
