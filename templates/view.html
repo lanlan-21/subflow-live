@@ -10,16 +10,14 @@
       margin: 0; background: #0a0a0a; color: #ffff33;
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", serif;
       height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+      transition: background 0.2s ease, color 0.2s ease;
     }
     #viewerContainer {
       flex: 1; padding: 16px 8px 60px 8px; font-size: 48px; line-height: 1.25;
       white-space: pre-wrap; word-break: break-all; overflow-y: auto; text-align: justify;
     }
-    /* 遠端注音：觀眾端看到的呼吸感文字 */
     .remote-comp {
-      color: inherit;
-      border-bottom: 1px dashed currentColor;
-      opacity: 0.8;
+      color: inherit; border-bottom: 1px dashed rgba(255, 255, 255, 0.4); opacity: 0.85;
     }
   </style>
 </head>
@@ -31,17 +29,47 @@
     const roomId = "{{ room_id }}";
     const viewerContainer = document.getElementById('viewerContainer');
     
-    socket.on('connect', () => { 
+    let baseCommittedText = "";
+    const remoteComposingMap = new Map();
+    let isRenderScheduled = false;
+
+    function scheduleUIRender() {
+      if (!isRenderScheduled) {
+        isRenderScheduled = true;
+        requestAnimationFrame(() => {
+          renderAudienceView();
+          isRenderScheduled = false;
+        });
+      }
+    }
+
+    function renderAudienceView() {
+      if (remoteComposingMap.size === 0) {
+        viewerContainer.textContent = baseCommittedText;
+        viewerContainer.scrollTop = viewerContainer.scrollHeight;
+        return;
+      }
+      const comps = Array.from(remoteComposingMap.values()).sort((a, b) => a.pos - b.pos);
       viewerContainer.innerHTML = '';
-      socket.emit('join', { room: roomId, is_editor: false }); 
-    });
+      let lastIdx = 0;
+      for (const c of comps) {
+        const p = Math.min(Math.max(c.pos, 0), baseCommittedText.length);
+        viewerContainer.appendChild(document.createTextNode(baseCommittedText.substring(lastIdx, p)));
+        const span = document.createElement('span');
+        span.className = 'remote-comp';
+        span.textContent = c.text;
+        viewerContainer.appendChild(span);
+        lastIdx = p;
+      }
+      viewerContainer.appendChild(document.createTextNode(baseCommittedText.substring(lastIdx)));
+      viewerContainer.scrollTop = viewerContainer.scrollHeight;
+    }
+
+    socket.on('connect', () => { viewerContainer.innerHTML = ''; socket.emit('join', { room: roomId, is_editor: false }); });
 
     socket.on('init_document', data => {
-      if (data && data.text) {
-        viewerContainer.innerHTML = data.text.replace(/\n/g, '\n');
-      } else {
-        viewerContainer.innerHTML = '';
-      }
+      baseCommittedText = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      scheduleUIRender();
       if (data && data.settings) applySettings(data.settings);
     });
 
@@ -52,85 +80,34 @@
       if (settings.theme === 'green') { document.body.style.background = '#c7edcc'; document.body.style.color = '#111827'; }
       if (settings.theme === 'navy') { document.body.style.background = '#0b132b'; document.body.style.color = '#e0e1dd'; }
       if (settings.theme === 'light') { document.body.style.background = '#f1f5f9'; document.body.style.color = '#0f172a'; }
-      
-      const px = (settings.pad_x || 8) + 'px';
-      const scaleVal = (settings.scale || 100) / 100;
+      const px = (settings.pad_x || 8) + 'px'; const py = (settings.pad_y || 16) + 'px';
       viewerContainer.style.fontSize = (settings.size || 48) + 'px';
-      viewerContainer.style.padding = `16px ${px} 60px ${px}`;
-      viewerContainer.style.zoom = scaleVal;
-    }
-
-    function getNodeAt(targetPos) {
-      let offset = 0;
-      const walker = document.createTreeWalker(viewerContainer, NodeFilter.SHOW_TEXT, null, false);
-      let node, lastNode = null;
-      while ((node = walker.nextNode())) {
-        if (node.parentNode && node.parentNode.classList.contains('remote-comp')) continue;
-        if (offset + node.nodeValue.length >= targetPos) return { node, offset: targetPos - offset };
-        offset += node.nodeValue.length;
-        lastNode = node;
-      }
-      return lastNode ? { node: lastNode, offset: lastNode.nodeValue.length } : { node: viewerContainer, offset: 0 };
+      viewerContainer.style.padding = `${py} ${px} 60px ${px}`;
+      viewerContainer.style.zoom = (settings.scale || 100) / 100;
     }
 
     socket.on('remote_operation', data => {
-      if (data.is_clear) {
-        viewerContainer.innerHTML = '';
-        return;
-      }
-      // 收到定稿，清除該人的注音狀態
-      const comp = document.getElementById('comp-' + data.client_id);
-      if (comp) comp.remove();
-
+      if (data.is_clear) { baseCommittedText = ''; remoteComposingMap.clear(); scheduleUIRender(); return; }
+      if (data.client_id) remoteComposingMap.delete(data.client_id);
       const ops = data.ops || [];
       for (let op of ops) {
         if (op.type === 'insert') {
-          const { node, offset } = getNodeAt(op.pos);
-          if (node === viewerContainer || !node) {
-            viewerContainer.appendChild(document.createTextNode(op.text));
-          } else if (node.nodeType === 3) {
-            node.nodeValue = node.nodeValue.slice(0, offset) + op.text + node.nodeValue.slice(offset);
-          }
+          const p = Math.min(op.pos, baseCommittedText.length);
+          baseCommittedText = baseCommittedText.slice(0, p) + op.text + baseCommittedText.slice(p);
         } else if (op.type === 'delete') {
-          let remaining = op.len;
-          while (remaining > 0) {
-            const { node, offset } = getNodeAt(op.pos);
-            if (!node || node === viewerContainer) break;
-            const delCount = Math.min(node.nodeValue.length - offset, remaining);
-            node.nodeValue = node.nodeValue.slice(0, offset) + node.nodeValue.slice(offset + delCount);
-            remaining -= delCount;
-            if (node.nodeValue.length === 0) node.remove();
-          }
+          const p = Math.min(op.pos, baseCommittedText.length);
+          const endP = Math.min(p + op.len, baseCommittedText.length);
+          baseCommittedText = baseCommittedText.slice(0, p) + baseCommittedText.slice(endP);
         }
       }
-      viewerContainer.scrollTop = viewerContainer.scrollHeight;
+      scheduleUIRender();
     });
 
-    // 🌟 觀眾端即刻渲染聽打員的呼吸感注音
     socket.on('remote_composing_stream', data => {
       if (!data || !data.client_id) return;
-      let span = document.getElementById('comp-' + data.client_id);
-      
-      if (!data.composing_text) {
-        if (span) span.remove();
-        return;
-      }
-      if (!span) {
-        span = document.createElement('span');
-        span.id = 'comp-' + data.client_id;
-        span.className = 'remote-comp';
-        const { node, offset } = getNodeAt(data.cursor_index);
-        if (node === viewerContainer) {
-          viewerContainer.appendChild(span);
-        } else {
-          const range = document.createRange();
-          range.setStart(node, offset);
-          range.collapse(true);
-          range.insertNode(span);
-        }
-      }
-      span.textContent = data.composing_text;
-      viewerContainer.scrollTop = viewerContainer.scrollHeight;
+      if (data.composing_text && data.composing_text.length > 0) remoteComposingMap.set(data.client_id, { pos: data.cursor_index, text: data.composing_text });
+      else remoteComposingMap.delete(data.client_id);
+      scheduleUIRender();
     });
   </script>
 </body>
