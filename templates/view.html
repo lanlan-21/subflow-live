@@ -2,443 +2,136 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>即時聽打投影 - 頻道 {{ room_id }}</title>
+  <title>觀眾大螢幕 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <!-- 🌟 Google 繁體正統楷書 WebFont CDN -->
-  <link rel="stylesheet" href="https://fonts.googleapis.com/earlyaccess/cwtexkai.css">
   <style>
     * { box-sizing: border-box; }
-    
-    body[data-theme="dark"] {
-      --bg-main: #000000;
-      --text-color: #ffff33;
+    body {
+      margin: 0; background: #0a0a0a; color: #ffff33;
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", serif;
+      height: 100vh; display: flex; flex-direction: column; overflow: hidden;
     }
-    body[data-theme="green"] {
-      --bg-main: #c7edcc;
-      --text-color: #111827;
+    #viewerContainer {
+      flex: 1; padding: 16px 8px 60px 8px; font-size: 48px; line-height: 1.25;
+      white-space: pre-wrap; word-break: break-all; overflow-y: auto; text-align: justify;
     }
-    body[data-theme="navy"] {
-      --bg-main: #0b132b;
-      --text-color: #e0e1dd;
-    }
-    body[data-theme="light"] {
-      --bg-main: #ffffff;
-      --text-color: #0f172a;
-    }
-
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-      background: var(--bg-main, #000000);
-      color: var(--text-color, #ffff33);
-      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "cwTeXKai", "Kaiti TC", "STKaiti", serif !important;
-      overflow-x: hidden;
-      overflow-y: auto;
-      scroll-behavior: smooth;
-      transition: background 0.25s ease, color 0.25s ease;
-    }
-
-    /* 頂部 20px 感應熱區 */
-    #topHoverZone {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 20px;
-      z-index: 2500;
-    }
-
-    /* 碰頂滑下的工具列（平時完全縮回，不擋文字） */
-    .viewer-toolbar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      background: rgba(15, 23, 42, 0.95);
-      border-bottom: 1px solid #334155;
-      padding: 8px 16px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      z-index: 3000;
-      font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif;
-      color: #e2e8f0;
-      font-size: 13px;
-      backdrop-filter: blur(8px);
-      box-shadow: 0 6px 20px rgba(0,0,0,0.7);
-      transform: translateY(-100%);
-      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-    #topHoverZone:hover + .viewer-toolbar,
-    .viewer-toolbar:hover,
-    .viewer-toolbar.forced-show {
-      transform: translateY(0) !important;
-    }
-
-    .control-group {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-    .size-input {
-      width: 56px;
-      text-align: center;
-      padding: 4px 6px;
-      border: 1px solid #555;
-      border-radius: 4px;
-      background: #1e293b;
-      color: #fff;
-      font-size: 13px;
-      outline: none;
-    }
-    .btn-step {
-      padding: 4px 8px;
-      border: 1px solid #475569;
-      background: #334155;
-      color: #fff;
-      border-radius: 4px;
-      cursor: pointer;
-      font-weight: bold;
-      font-size: 12px;
-    }
-    .btn-step:hover { background: #475569; }
-
-    .btn {
-      padding: 5px 14px;
-      border: 1px solid #475569;
-      background: #1e293b;
-      color: #fff;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      transition: all 0.2s;
-    }
-    .btn:hover { background: #334155; }
-    
-    .btn-following {
-      background: #15803d;
-      border-color: #22c55e;
-      color: #f0fdf4;
-      cursor: default;
-    }
-    .btn-free {
-      background: #b45309;
-      border-color: #f59e0b;
-      color: #fffbeb;
-      animation: pulseAttention 2s infinite alternate;
-    }
-    .btn-free:hover {
-      background: #d97706;
-    }
-    @keyframes pulseAttention {
-      from { box-shadow: 0 0 0 rgba(245, 158, 11, 0); }
-      to { box-shadow: 0 0 10px rgba(245, 158, 11, 0.4); }
-    }
-
-    .status-pill {
-      margin-left: auto;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 12px;
-      color: #94a3b8;
-    }
-    .status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #22c55e;
-      display: inline-block;
-      box-shadow: 0 0 6px #22c55e;
-    }
-
-    #toggleToolBtn {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      width: 36px;
-      height: 36px;
-      border-radius: 50%;
-      background: rgba(30, 41, 59, 0.6);
-      border: 1px solid #475569;
-      color: #94a3b8;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      font-size: 16px;
-      z-index: 2100;
-      opacity: 0.35;
-      transition: opacity 0.2s, background 0.2s;
-    }
-    #toggleToolBtn:hover {
-      opacity: 1;
-      background: rgba(30, 41, 59, 0.95);
-      color: #38bdf8;
-    }
-
-    /* 🌟 大螢幕內文投影區：回歸自然無遮擋邊距 */
-    #displayArea {
-      width: 100%;
-      min-height: 100%;
-      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "cwTeXKai", "Kaiti TC", "STKaiti", serif !important;
-      font-size: 48px;
-      line-height: 1.25;
-      letter-spacing: 0px;
-      color: var(--text-color, #ffff33);
-      white-space: pre-wrap;
-      word-break: break-all;
-      text-align: justify;
-      transform-origin: top left;
-      padding: 16px 16px 120px 16px;
-    }
-
-    /* 🌟 純淨無虛線的即時出字標籤：徹底拔除底線與虛線，純字顯示 */
-    #liveGhostSpan {
-      display: inline;
-      color: var(--text-color, #ffff33);
-      border-bottom: none !important;
-      text-decoration: none !important;
-      outline: none !important;
-    }
-
-    body.is-fullscreen .viewer-toolbar {
-      transform: translateY(-90%);
-    }
-    body.is-fullscreen .viewer-toolbar:hover {
-      transform: translateY(0);
+    /* 遠端注音：觀眾端看到的呼吸感文字 */
+    .remote-comp {
+      color: inherit;
+      border-bottom: 1px dashed currentColor;
+      opacity: 0.8;
     }
   </style>
 </head>
-<body data-theme="dark">
-
-  <div id="topHoverZone"></div>
-
-  <div class="viewer-toolbar" id="viewerToolbar">
-    <div class="control-group">
-      <label for="scaleInput">觀看比例：</label>
-      <input type="number" id="scaleInput" class="size-input" value="100" min="40" max="250" step="5" onchange="applyCurrentScale()">%
-      <button class="btn-step" onclick="stepScale(5)">+5%</button>
-      <button class="btn-step" onclick="stepScale(-5)">-5%</button>
-    </div>
-
-    <button class="btn btn-following" id="followBtn" onclick="onClickFollowButton()">
-      🔗 跟隨主投影中（自動跳底）
-    </button>
-
-    <button class="btn" onclick="toggleFullscreen()">
-      ⛶ 全螢幕
-    </button>
-
-    <button class="btn" onclick="hideToolbarNow()">
-      ▲ 收起面板
-    </button>
-
-    <div class="status-pill">
-      <span class="status-dot"></span>
-      <span>頻道 {{ room_id }} 投影</span>
-    </div>
-  </div>
-
-  <div id="displayArea"><span id="solidText"></span><span id="liveGhostSpan" style="display: none;"></span></div>
-
-  <div id="toggleToolBtn" onclick="manualToggleToolbar()" title="展開/收起工具列">⚙️</div>
+<body>
+  <div id="viewerContainer">等待聽打員連線...</div>
 
   <script>
-    const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
+    const socket = io({ reconnection: true, reconnectionAttempts: Infinity });
     const roomId = "{{ room_id }}";
-    const displayArea = document.getElementById('displayArea');
-    const solidText = document.getElementById('solidText');
-    const liveGhostSpan = document.getElementById('liveGhostSpan');
-    const scaleInput = document.getElementById('scaleInput');
-    const followBtn = document.getElementById('followBtn');
-    const viewerToolbar = document.getElementById('viewerToolbar');
-
-    let isAutoScrolling = true;
-    let hasUserCustomScale = false;
-    let masterSettings = null;
-    let autoHideTimer = null;
-
-    function manualToggleToolbar() {
-      viewerToolbar.classList.toggle('forced-show');
-    }
-    function hideToolbarNow() {
-      viewerToolbar.classList.remove('forced-show');
-    }
-
-    viewerToolbar.addEventListener('mouseleave', () => {
-      clearTimeout(autoHideTimer);
-      autoHideTimer = setTimeout(() => {
-        viewerToolbar.classList.remove('forced-show');
-      }, 2000);
-    });
-
-    function stepScale(delta) {
-      let currentVal = parseInt(scaleInput.value, 10) || 100;
-      scaleInput.value = Math.min(Math.max(currentVal + delta, 40), 250);
-      applyCurrentScale();
-    }
-
-    function applyCurrentScale() {
-      hasUserCustomScale = true;
-      const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
-      if ('zoom' in displayArea.style) {
-        displayArea.style.zoom = scaleVal;
-      } else {
-        displayArea.style.transform = `scale(${scaleVal})`;
-        displayArea.style.width = `${100 / scaleVal}%`;
-      }
-      if (isAutoScrolling) scrollToBottom();
-    }
-
-    function onClickFollowButton() {
-      if (!isAutoScrolling) {
-        setAutoScrollingMode(true);
-        scrollToBottom();
-      }
-    }
-
-    function setAutoScrollingMode(active) {
-      isAutoScrolling = active;
-      if (isAutoScrolling) {
-        followBtn.className = "btn btn-following";
-        followBtn.innerText = "🔗 跟隨主投影中（自動跳底）";
-      } else {
-        followBtn.className = "btn btn-free";
-        followBtn.innerText = "📜 自由瀏覽中（點此切回跟隨）";
-      }
-    }
-
-    function scrollToBottom() {
-      if (!isAutoScrolling) return;
-      window.scrollTo({
-        top: document.documentElement.scrollHeight,
-        behavior: 'smooth'
-      });
-    }
-
-    window.addEventListener('scroll', () => {
-      const scrollPos = window.innerHeight + window.scrollY;
-      const threshold = document.documentElement.scrollHeight - 80;
-      if (scrollPos < threshold && isAutoScrolling) {
-        setAutoScrollingMode(false);
-      } else if (scrollPos >= threshold && !isAutoScrolling) {
-        setAutoScrollingMode(true);
-      }
-    });
-
-    function toggleFullscreen() {
-      if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(() => {});
-      } else if (document.exitFullscreen) {
-        document.exitFullscreen();
-      }
-    }
-
-    socket.on('connect', () => {
-      socket.emit('join', { room: roomId, is_editor: false });
+    const viewerContainer = document.getElementById('viewerContainer');
+    
+    socket.on('connect', () => { 
+      viewerContainer.innerHTML = '';
+      socket.emit('join', { room: roomId, is_editor: false }); 
     });
 
     socket.on('init_document', data => {
-      if (!data) return;
-      solidText.innerText = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      liveGhostSpan.style.display = 'none';
-      liveGhostSpan.innerText = '';
-      if (data.settings) {
-        masterSettings = data.settings;
-        applyMasterSettings(masterSettings);
-      }
-      setTimeout(scrollToBottom, 60);
-    });
-
-    // 🌟 隨打隨現：未按 Enter 的即時組字，純字顯示，完全無虛線
-    socket.on('audience_live_composing', data => {
-      if (!data) return;
-      const compText = data.composing_text || '';
-      if (compText.trim().length > 0) {
-        liveGhostSpan.innerText = compText;
-        liveGhostSpan.style.display = 'inline';
+      if (data && data.text) {
+        viewerContainer.innerHTML = data.text.replace(/\n/g, '\n');
       } else {
-        liveGhostSpan.innerText = '';
-        liveGhostSpan.style.display = 'none';
+        viewerContainer.innerHTML = '';
       }
-      if (isAutoScrolling) scrollToBottom();
+      if (data && data.settings) applySettings(data.settings);
     });
 
-    // 定稿動作：無縫轉為正式內文
+    socket.on('sync_settings', data => { applySettings(data); });
+
+    function applySettings(settings) {
+      if (settings.theme === 'dark') { document.body.style.background = '#0a0a0a'; document.body.style.color = '#ffff33'; }
+      if (settings.theme === 'green') { document.body.style.background = '#c7edcc'; document.body.style.color = '#111827'; }
+      if (settings.theme === 'navy') { document.body.style.background = '#0b132b'; document.body.style.color = '#e0e1dd'; }
+      if (settings.theme === 'light') { document.body.style.background = '#f1f5f9'; document.body.style.color = '#0f172a'; }
+      
+      const px = (settings.pad_x || 8) + 'px';
+      const scaleVal = (settings.scale || 100) / 100;
+      viewerContainer.style.fontSize = (settings.size || 48) + 'px';
+      viewerContainer.style.padding = `16px ${px} 60px ${px}`;
+      viewerContainer.style.zoom = scaleVal;
+    }
+
+    function getNodeAt(targetPos) {
+      let offset = 0;
+      const walker = document.createTreeWalker(viewerContainer, NodeFilter.SHOW_TEXT, null, false);
+      let node, lastNode = null;
+      while ((node = walker.nextNode())) {
+        if (node.parentNode && node.parentNode.classList.contains('remote-comp')) continue;
+        if (offset + node.nodeValue.length >= targetPos) return { node, offset: targetPos - offset };
+        offset += node.nodeValue.length;
+        lastNode = node;
+      }
+      return lastNode ? { node: lastNode, offset: lastNode.nodeValue.length } : { node: viewerContainer, offset: 0 };
+    }
+
     socket.on('remote_operation', data => {
-      if (!data) return;
-
-      liveGhostSpan.innerText = '';
-      liveGhostSpan.style.display = 'none';
-
       if (data.is_clear) {
-        solidText.innerText = '';
+        viewerContainer.innerHTML = '';
         return;
       }
+      // 收到定稿，清除該人的注音狀態
+      const comp = document.getElementById('comp-' + data.client_id);
+      if (comp) comp.remove();
 
-      if (data.full_text !== undefined) {
-        solidText.innerText = data.full_text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      } else {
-        let text = solidText.innerText;
-        const ops = data.ops || [];
-        for (const op of ops) {
-          if (op.type === 'insert') {
-            const insertText = op.text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            const p = Math.min(op.pos, text.length);
-            text = text.slice(0, p) + insertText + text.slice(p);
-          } else if (op.type === 'delete') {
-            const p = Math.min(op.pos, text.length);
-            const endP = Math.min(p + op.len, text.length);
-            text = text.slice(0, p) + text.slice(endP);
+      const ops = data.ops || [];
+      for (let op of ops) {
+        if (op.type === 'insert') {
+          const { node, offset } = getNodeAt(op.pos);
+          if (node === viewerContainer || !node) {
+            viewerContainer.appendChild(document.createTextNode(op.text));
+          } else if (node.nodeType === 3) {
+            node.nodeValue = node.nodeValue.slice(0, offset) + op.text + node.nodeValue.slice(offset);
+          }
+        } else if (op.type === 'delete') {
+          let remaining = op.len;
+          while (remaining > 0) {
+            const { node, offset } = getNodeAt(op.pos);
+            if (!node || node === viewerContainer) break;
+            const delCount = Math.min(node.nodeValue.length - offset, remaining);
+            node.nodeValue = node.nodeValue.slice(0, offset) + node.nodeValue.slice(offset + delCount);
+            remaining -= delCount;
+            if (node.nodeValue.length === 0) node.remove();
           }
         }
-        solidText.innerText = text;
       }
-
-      if (isAutoScrolling) scrollToBottom();
+      viewerContainer.scrollTop = viewerContainer.scrollHeight;
     });
 
-    socket.on('sync_settings', settings => {
-      masterSettings = settings;
-      applyMasterSettings(settings);
-    });
-
-    function applyMasterSettings(settings) {
-      if (!settings) return;
-
-      if (settings.theme) {
-        document.body.setAttribute('data-theme', settings.theme);
+    // 🌟 觀眾端即刻渲染聽打員的呼吸感注音
+    socket.on('remote_composing_stream', data => {
+      if (!data || !data.client_id) return;
+      let span = document.getElementById('comp-' + data.client_id);
+      
+      if (!data.composing_text) {
+        if (span) span.remove();
+        return;
       }
-
-      if (settings.size) {
-        displayArea.style.fontSize = settings.size + 'px';
-      }
-
-      if (!hasUserCustomScale && settings.scale !== undefined) {
-        scaleInput.value = settings.scale;
-        const scaleVal = settings.scale / 100;
-        if ('zoom' in displayArea.style) {
-          displayArea.style.zoom = scaleVal;
+      if (!span) {
+        span = document.createElement('span');
+        span.id = 'comp-' + data.client_id;
+        span.className = 'remote-comp';
+        const { node, offset } = getNodeAt(data.cursor_index);
+        if (node === viewerContainer) {
+          viewerContainer.appendChild(span);
         } else {
-          displayArea.style.transform = `scale(${scaleVal})`;
-          displayArea.style.width = `${100 / scaleVal}%`;
+          const range = document.createRange();
+          range.setStart(node, offset);
+          range.collapse(true);
+          range.insertNode(span);
         }
       }
-
-      const px = (settings.pad_x !== undefined ? settings.pad_x : 16) + 'px';
-      const py = (settings.pad_y !== undefined ? settings.pad_y : 16) + 'px';
-      displayArea.style.padding = `${py} ${px} 120px ${px}`;
-
-      if (isAutoScrolling) scrollToBottom();
-    }
+      span.textContent = data.composing_text;
+      viewerContainer.scrollTop = viewerContainer.scrollHeight;
+    });
   </script>
 </body>
 </html>
