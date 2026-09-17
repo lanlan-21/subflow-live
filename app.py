@@ -12,8 +12,7 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 rooms = {}
 cleanup_timers = {}
-CLEANUP_TIMEOUT_SECONDS = 1800  # 30 分鐘無人連線自動清理
-
+CLEANUP_TIMEOUT_SECONDS = 1800 
 
 def schedule_room_cleanup(room_id):
     cancel_room_cleanup(room_id)
@@ -21,7 +20,6 @@ def schedule_room_cleanup(room_id):
         if room_id in rooms:
             total_connected = len(rooms[room_id].get("editors", {})) + len(rooms[room_id].get("viewers", set()))
             if total_connected == 0:
-                print(f"[自動清理] 房間 {room_id} 釋放記憶體。")
                 rooms.pop(room_id, None)
         cleanup_timers.pop(room_id, None)
     timer = threading.Timer(CLEANUP_TIMEOUT_SECONDS, cleanup_job)
@@ -73,15 +71,12 @@ def transform_primitive(op1, op2, priority):
             start = max(p1, p2)
             end = min(p1 + l1, p2 + l2)
             overlap = end - start
-            new_len = l1 - overlap
-            if new_len <= 0:
-                return None
-            return {'type': 'delete', 'pos': min(p1, p2), 'len': new_len}
+            if l1 - overlap <= 0: return None
+            return {'type': 'delete', 'pos': min(p1, p2), 'len': l1 - overlap}
     return op1
 
 def apply_op_to_text(text, op):
-    if not op:
-        return text
+    if not op: return text
     if op['type'] == 'insert':
         p = min(max(0, op['pos']), len(text))
         return text[:p] + op['text'] + text[p:]
@@ -90,7 +85,6 @@ def apply_op_to_text(text, op):
         l = op['len']
         return text[:p] + text[p+l:]
     return text
-
 
 @app.route('/')
 def index():
@@ -109,27 +103,21 @@ def new_room():
     random_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
     return redirect(url_for('edit', room_id=random_str))
 
-
 @socketio.on('join')
 def handle_join(data):
     room_id = data.get('room')
     is_editor = data.get('is_editor', False)
     client_id = data.get('client_id') or request.sid
     sid = request.sid
-    if not room_id:
-        return
+    if not room_id: return
 
     cancel_room_cleanup(room_id)
 
     if room_id not in rooms:
         rooms[room_id] = {
-            "text": "",
-            "version": 0,
-            "history": [],
+            "text": "", "version": 0, "history": [],
             "settings": {"theme": "dark", "size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
-            "master_client_id": None,
-            "editors": {},
-            "viewers": set()
+            "master_client_id": None, "editors": {}, "viewers": set()
         }
 
     join_room(room_id)
@@ -146,21 +134,17 @@ def handle_join(data):
         "version": rooms[room_id]["version"],
         "settings": rooms[room_id]["settings"]
     }, to=sid)
-
     broadcast_roles_status(room_id)
-
 
 @socketio.on('client_operation')
 def handle_client_operation(data):
     room_id = data.get('room')
     client_id = data.get('client_id') or request.sid
     sid = request.sid
-    if not room_id or room_id not in rooms:
-        return
+    if not room_id or room_id not in rooms: return
 
     cancel_room_cleanup(room_id)
     rdata = rooms[room_id]
-
     base_version = data.get('base_version', 0)
     raw_ops = data.get('ops', [])
 
@@ -168,12 +152,7 @@ def handle_client_operation(data):
         rdata["text"] = ""
         rdata["version"] += 1
         rdata["history"].append({'version': rdata["version"], 'op': {'type': 'clear'}})
-        emit('remote_operation', {
-            'version': rdata["version"],
-            'is_clear': True,
-            'full_text': '',
-            'client_id': client_id
-        }, to=room_id, include_self=False)
+        emit('remote_operation', {'version': rdata["version"], 'is_clear': True, 'full_text': '', 'client_id': client_id}, to=room_id, include_self=False)
         emit('ack_operation', {'version': rdata["version"]}, to=sid)
         return
 
@@ -190,52 +169,38 @@ def handle_client_operation(data):
             if hist['version'] > base_version:
                 if hist['op'].get('type') != 'clear':
                     curr = transform_primitive(curr, hist['op'], priority='right')
-                    if curr is None:
-                        break
+                    if curr is None: break
         if curr:
             transformed_ops.append(curr)
             rdata["text"] = apply_op_to_text(rdata["text"], curr)
             rdata["version"] += 1
             rdata["history"].append({'version': rdata["version"], 'op': curr})
 
-    if len(rdata["history"]) > 600:
-        rdata["history"] = rdata["history"][-600:]
-
+    if len(rdata["history"]) > 600: rdata["history"] = rdata["history"][-600:]
     emit('ack_operation', {'version': rdata["version"]}, to=sid)
 
     if transformed_ops:
         emit('remote_operation', {
-            'version': rdata["version"],
-            'ops': transformed_ops,
-            'full_text': rdata["text"],
-            'client_id': client_id
+            'version': rdata["version"], 'ops': transformed_ops,
+            'full_text': rdata["text"], 'client_id': client_id
         }, to=room_id, include_self=False)
-
 
 @socketio.on('live_composing_stream')
 def handle_live_composing_stream(data):
     room_id = data.get('room')
     client_id = data.get('client_id')
-    if not client_id or not room_id or room_id not in rooms:
-        return
+    if not client_id or not room_id or room_id not in rooms: return
     emit('remote_composing_stream', {
-        'client_id': client_id,
-        'cursor_index': data.get('cursor_index', 0),
+        'client_id': client_id, 'cursor_index': data.get('cursor_index', 0),
         'composing_text': data.get('composing_text', '')
     }, to=room_id, include_self=False)
-
 
 @socketio.on('cursor_move')
 def handle_cursor_move(data):
     room_id = data.get('room')
     client_id = data.get('client_id')
-    if not client_id or not room_id or room_id not in rooms:
-        return
-    emit('cursor_update', {
-        'client_id': client_id,
-        'cursor_index': data.get('cursor_index', 0)
-    }, to=room_id, include_self=False)
-
+    if not client_id or not room_id or room_id not in rooms: return
+    emit('cursor_update', {'client_id': client_id, 'cursor_index': data.get('cursor_index', 0)}, to=room_id, include_self=False)
 
 @socketio.on('update_settings')
 def handle_update_settings(data):
@@ -249,7 +214,6 @@ def handle_update_settings(data):
         rooms[room_id]["settings"]["pad_y"] = data.get('pad_y', 10)
         emit('sync_settings', rooms[room_id]["settings"], to=room_id, include_self=False)
 
-
 @socketio.on('claim_master')
 def handle_claim_master(data):
     room_id = data.get('room')
@@ -258,50 +222,38 @@ def handle_claim_master(data):
         rooms[room_id]["master_client_id"] = client_id
         broadcast_roles_status(room_id)
 
-
 @socketio.on('disconnect')
 def handle_disconnect():
     sid = request.sid
     for room_id, rdata in list(rooms.items()):
         modified = False
-
         disconnected_cid = None
         for cid, csid in list(rdata["editors"].items()):
             if csid == sid:
                 disconnected_cid = cid
                 break
-
         if disconnected_cid:
             rdata["editors"].pop(disconnected_cid, None)
             modified = True
             emit('cursor_remove', {'client_id': disconnected_cid}, to=room_id)
-
             if rdata["master_client_id"] == disconnected_cid:
                 rdata["master_client_id"] = next(iter(rdata["editors"])) if rdata["editors"] else None
-
         if sid in rdata["viewers"]:
             rdata["viewers"].remove(sid)
             modified = True
-
         if modified:
             broadcast_roles_status(room_id)
-            total_active = len(rdata["editors"]) + len(rdata["viewers"])
-            if total_active == 0:
+            if len(rdata["editors"]) + len(rdata["viewers"]) == 0:
                 schedule_room_cleanup(room_id)
 
-
 def broadcast_roles_status(room_id):
-    if room_id not in rooms:
-        return
+    if room_id not in rooms: return
     rdata = rooms[room_id]
     active_cids = list(rdata["editors"].keys())
     socketio.emit('role_status_update', {
-        "master_client_id": rdata["master_client_id"],
-        "total_editors": len(active_cids),
-        "active_editors": active_cids,
-        "total_viewers": len(rdata["viewers"])
+        "master_client_id": rdata["master_client_id"], "total_editors": len(active_cids),
+        "active_editors": active_cids, "total_viewers": len(rdata["viewers"])
     }, to=room_id)
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
