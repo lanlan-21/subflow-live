@@ -46,6 +46,7 @@
     .editor-wrapper { flex: 1; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
     .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; padding-bottom: 60px; }
 
+    /* 真正 Google Docs 的 DOM 節點編輯器 */
     #editor {
       min-height: 100%; padding: 16px 8px 10px 8px;
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
@@ -59,6 +60,7 @@
     }
     #endLineMarker span { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #ef4444; font-size: 11px; font-family: monospace; font-weight: bold; padding: 1px 6px; border-radius: 3px; margin-top: -12px; letter-spacing: 1px; }
 
+    /* 遠端推移提示線：完全融入內文，絕無淡色漂浮字 */
     .remote-comp { color: inherit; border-bottom: 1px dashed #71717a; pointer-events: none; }
     .remote-cursor { position: absolute; width: 3px; pointer-events: none; z-index: 50; display: none; transition: opacity 0.3s ease; }
     .remote-cursor-tag { position: absolute; top: -24px; left: -2px; color: #fff; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); z-index: 60; }
@@ -170,7 +172,6 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <!-- 徹底捨棄 textarea，採用內容渲染節點 -->
       <div id="editor" contenteditable="true" spellcheck="false"></div>
       <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="remoteCursorsContainer"></div>
@@ -227,6 +228,8 @@
     const scaleInput = document.getElementById('scaleInput');
     const padXInput = document.getElementById('padXInput');
     const padYInput = document.getElementById('padYInput');
+    const masterToggleBtn = document.getElementById('masterToggleBtn');
+    const modeHintText = document.getElementById('modeHintText');
     
     const aiToggleBtn = document.getElementById('aiToggleBtn');
     const aiStreamBar = document.getElementById('aiStreamBar');
@@ -236,6 +239,7 @@
     const vuFill = document.getElementById('vuFill');
 
     let amIMaster = true;
+    let currentMasterClientId = null;
     let isComposing = false;
     let serverVersion = 0;
     
@@ -244,8 +248,9 @@
     let bufferOps = [];
     const remoteCursors = new Map();
     let liveTypingTimer = null;
+    let lastSentCursor = -1;
 
-    // 🌟 1. 攔截換行與貼上，防堵瀏覽器產生 <br> 和 <div> 引發不同步
+    // 🌟 1. 攔截換行與貼上：保證排版只有純粹的 TextNode 與 <br>，絕不會遺失段落
     editor.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
         if (e.isComposing || isComposing) return;
@@ -278,108 +283,76 @@
       broadcastCursorOnly();
     }
 
-    // 🌟 2. 乾淨字串萃取器，過濾掉所有暫存與游標元素
+    // 🌟 核心過濾器：徹底無視夥伴的注音與游標元素，不干擾算字數
+    const acceptNodeFilter = {
+      acceptNode: function(node) {
+          if (node.nodeType === Node.ELEMENT_NODE && node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) {
+              return NodeFilter.FILTER_REJECT; // 嚴格拒絕干擾節點及其子節點
+          }
+          return NodeFilter.FILTER_ACCEPT;
+      }
+    };
+
+    // 🌟 2. 乾淨字串萃取器
     function getCleanText() {
       let text = '';
-      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, acceptNodeFilter, false);
       let node;
       while ((node = walker.nextNode())) {
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          if (node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) continue;
-          if (node.tagName === 'BR') text += '\n';
-        } else if (node.nodeType === Node.TEXT_NODE) {
-          let p = node.parentNode;
-          let skip = false;
-          while (p && p !== editor) {
-            if (p.classList && (p.classList.contains('remote-comp') || p.classList.contains('remote-cursor'))) { skip = true; break; }
-            p = p.parentNode;
-          }
-          if (!skip) text += node.nodeValue;
-        }
+        if (node.nodeType === Node.TEXT_NODE) text += node.nodeValue;
+        else if (node.tagName === 'BR') text += '\n';
+        else if (node.tagName === 'DIV' || node.tagName === 'P') text += '\n'; // 備用相容
       }
       return text;
     }
 
-    // 🌟 3. 座標游標鎖定，絕不依賴舊屬性
+    // 🌟 3. 精準游標捕捉器
     function getCaret() {
       const sel = window.getSelection();
-      if (!sel.rangeCount) return 0;
+      if (!sel.rangeCount) return lastSentCursor > -1 ? lastSentCursor : 0;
       
       let targetNode = sel.anchorNode;
       let targetOffset = sel.anchorOffset;
       if (!editor.contains(targetNode) && targetNode !== editor) return lastSentCursor > -1 ? lastSentCursor : 0;
       
       let textLen = 0;
-      let found = false;
-
-      function countNode(node, bypassCheck) {
-        if (found) return;
-        if (!bypassCheck && node.nodeType === Node.ELEMENT_NODE && node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) return;
-
-        if (node.nodeType === Node.TEXT_NODE) {
-           textLen += node.nodeValue.length;
-        } else if (node.tagName === 'BR') {
-           textLen += 1;
-        } else {
-           for (let i = 0; i < node.childNodes.length; i++) {
-             if (node.childNodes[i] === targetNode) {
-                for (let j = 0; j < targetOffset; j++) countNode(node.childNodes[j], true);
-                found = true;
-                return;
-             }
-             traverse(node.childNodes[i]);
-             if (found) return;
-           }
-        }
-      }
-
-      function traverse(node) {
-        if (found) return;
-        if (node === targetNode) {
-          if (node.nodeType === Node.TEXT_NODE) textLen += targetOffset;
-          else for (let i = 0; i < targetOffset; i++) if (node.childNodes[i]) countNode(node.childNodes[i], true);
-          found = true;
-          return;
-        }
-        countNode(node, false);
-      }
-      
-      for(let i=0; i<editor.childNodes.length; i++){
-          if(editor.childNodes[i] === targetNode){
-              for(let j=0; j<targetOffset; j++) if(editor.childNodes[j]) countNode(editor.childNodes[j], true);
-              found = true;
-              break;
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, acceptNodeFilter, false);
+      let node;
+      while ((node = walker.nextNode())) {
+          if (node === targetNode) {
+              if (node.nodeType === Node.TEXT_NODE) return textLen + targetOffset;
+              else {
+                  let childText = 0;
+                  for (let i = 0; i < targetOffset; i++) {
+                      if (node.childNodes[i]) {
+                          if (node.childNodes[i].nodeName === 'BR') childText += 1;
+                          else if (node.childNodes[i].nodeType === Node.TEXT_NODE) childText += node.childNodes[i].nodeValue.length;
+                      }
+                  }
+                  return textLen + childText;
+              }
           }
-          traverse(editor.childNodes[i]);
-          if(found) break;
+          if (node.nodeType === Node.TEXT_NODE) textLen += node.nodeValue.length;
+          else if (node.nodeName === 'BR') textLen += 1;
       }
       return textLen;
     }
 
     function getNodeAt(targetPos) {
       let offset = 0;
-      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, acceptNodeFilter, false);
       let node;
       let lastNode = editor;
       while ((node = walker.nextNode())) {
-        let skip = false;
-        let p = node.parentNode;
-        while (p && p !== editor) {
-          if (p.classList && (p.classList.contains('remote-comp') || p.classList.contains('remote-cursor'))) { skip = true; break; }
-          p = p.parentNode;
-        }
-        if (node.nodeType === Node.ELEMENT_NODE && node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) skip = true;
-        if (skip) continue;
-
-        if (node.nodeType === Node.ELEMENT_NODE && node.tagName === 'BR') {
-          if (offset >= targetPos) return { node, offset: 0 };
-          offset += 1;
-          lastNode = node;
-        } else if (node.nodeType === Node.TEXT_NODE) {
-          if (offset + node.nodeValue.length >= targetPos) return { node, offset: targetPos - offset };
-          offset += node.nodeValue.length;
-          lastNode = node;
-        }
+          if (node.nodeType === Node.TEXT_NODE) {
+              if (offset + node.nodeValue.length >= targetPos) return { node, offset: targetPos - offset };
+              offset += node.nodeValue.length;
+              lastNode = node;
+          } else if (node.nodeName === 'BR') {
+              if (offset >= targetPos) return { node, offset: 0 };
+              offset += 1;
+              lastNode = node;
+          }
       }
       if (lastNode === editor) return { node: editor, offset: 0 };
       if (lastNode.nodeType === Node.TEXT_NODE) return { node: lastNode, offset: lastNode.nodeValue.length };
@@ -410,11 +383,9 @@
           else if (node.nodeType === Node.TEXT_NODE) {
             const split = node.splitText(offset);
             node.parentNode.insertBefore(txtNode, split);
-          } else if (node.tagName === 'BR') {
+          } else if (node.nodeName === 'BR') {
             node.parentNode.insertBefore(txtNode, node);
-          } else {
-            editor.appendChild(txtNode);
-          }
+          } else editor.appendChild(txtNode);
           currentPos += parts[i].length;
         }
         if (i < parts.length - 1) { 
@@ -424,11 +395,9 @@
           else if (node.nodeType === Node.TEXT_NODE) {
             const split = node.splitText(offset);
             node.parentNode.insertBefore(br, split);
-          } else if (node.tagName === 'BR') {
+          } else if (node.nodeName === 'BR') {
             node.parentNode.insertBefore(br, node);
-          } else {
-            editor.appendChild(br);
-          }
+          } else editor.appendChild(br);
           currentPos += 1;
         }
       }
@@ -445,7 +414,7 @@
           node.deleteData(offset, delCount);
           remaining -= delCount;
           if (node.nodeValue.length === 0) node.remove();
-        } else if (node.tagName === 'BR') {
+        } else if (node.nodeName === 'BR') {
           node.remove();
           remaining -= 1;
         } else break;
@@ -585,7 +554,7 @@
 
     function handleLocalTyping() {
       const currentText = getCleanText();
-      if (currentText === localShadowText) return; // 沒有實質改變，直接跳過，省去多餘更新
+      if (currentText === localShadowText) return; 
       const ops = getAtomicOps(localShadowText, currentText);
       localShadowText = currentText;
       
@@ -636,7 +605,7 @@
         scheduleUIRender(); return;
       }
 
-      updateRemoteComp(data.client_id, 0, ''); // 清理夥伴注音暫存
+      updateRemoteComp(data.client_id, 0, ''); 
       serverVersion = data.version;
       const remoteOps = data.ops || [];
 
@@ -675,7 +644,6 @@
     });
 
     // --- 即時注音流與打字捕捉 ---
-    let liveTypingTimer = null;
     function broadcastLiveTyping(str) {
       clearTimeout(liveTypingTimer);
       liveTypingTimer = setTimeout(() => {
@@ -689,6 +657,7 @@
       updateRemoteComp(data.client_id, data.cursor_index, data.composing_text);
       const renderPos = data.composing_text.length > 0 ? data.cursor_index + data.composing_text.length : data.cursor_index;
       updateRemoteCursor(data.client_id, renderPos);
+      scheduleUIRender();
     });
 
     editor.addEventListener('compositionstart', () => { isComposing = true; broadcastLiveTyping('...'); });
@@ -699,7 +668,6 @@
       broadcastLiveTyping(''); handleLocalTyping(); broadcastCursorOnly();
     });
 
-    let lastSentCursor = -1;
     function broadcastCursorOnly() {
       const pos = getCaret();
       if (pos !== lastSentCursor) {
@@ -742,8 +710,9 @@
       scheduleUIRender();
     }
 
-    // --- 連線初始化 ---
+    // --- 連線與狀態更新 ---
     socket.on('connect', () => { editor.innerHTML = ''; socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); });
+    
     socket.on('init_document', data => {
       if (!data) return;
       editor.innerHTML = '';
@@ -755,15 +724,17 @@
         if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
         if (data.settings.scale) scaleInput.value = data.settings.scale;
         if (data.settings.pad_x) padXInput.value = data.settings.pad_x;
-        if (data.settings.pad_y) document.getElementById('padYInput').value = data.settings.pad_y;
+        if (data.settings.pad_y) padYInput.value = data.settings.pad_y;
         applyLocalStyle();
       }
     });
 
+    // 🌟 確保 UI 文字完全更新，不再卡住
     socket.on('role_status_update', data => {
       const totalEditors = data.total_editors || 1;
       document.getElementById('viewerCountText').innerText = data.total_viewers || 0;
       amIMaster = (data.master_client_id === myClientId);
+      currentMasterClientId = data.master_client_id;
 
       remoteCursors.forEach((item, cid) => {
         if (!data.active_editors.includes(cid) || cid === myClientId) {
@@ -771,6 +742,7 @@
           updateRemoteComp(cid, 0, ''); remoteCursors.delete(cid);
         }
       });
+
       if (totalEditors <= 1) {
         document.getElementById('onlineDot').style.background = '#eab308';
         document.getElementById('onlineCountText').innerHTML = `👤 僅您在線`;
@@ -778,25 +750,35 @@
         document.getElementById('onlineDot').style.background = '#22c55e';
         document.getElementById('onlineCountText').innerHTML = `👥 協作在線：<strong style="color:#4ade80;">${totalEditors}</strong> 人`;
       }
+
+      if (amIMaster) {
+          masterToggleBtn.className = "btn btn-master-role active";
+          masterToggleBtn.innerText = totalEditors <= 1 ? "🔒 主投影 (單人)" : "🔒 主投影 (主控中)";
+          modeHintText.innerText = "身分：【主投影控制台】";
+      } else {
+          masterToggleBtn.className = "btn btn-master-role inactive";
+          masterToggleBtn.innerText = "👑 點擊接管主投影";
+          modeHintText.innerText = "身分：【獨立協作視圖】";
+      }
       scheduleUIRender();
     });
 
-    // --- 工具列與輔助功能 ---
+    // --- 工具列與 UI 功能 ---
     window.addEventListener('resize', scheduleUIRender);
     editor.addEventListener('scroll', scheduleUIRender);
 
     function applyLocalStyle() {
-      const px = padXInput.value + 'px'; const py = document.getElementById('padYInput').value + 'px';
+      const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
       editor.style.padding = `${py} ${px} 60px ${px}`;
       editor.style.zoom = scaleVal;
       scheduleUIRender();
     }
-    function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { room: roomId, client_id: myClientId, theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(document.getElementById('padYInput').value, 10) }); }
+    function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { room: roomId, client_id: myClientId, theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(padYInput.value, 10) }); }
     function stepScale(delta) { scaleInput.value = Math.min(Math.max((parseInt(scaleInput.value, 10) || 100) + delta, 40), 250); applyAndSync(); }
     function stepPadX(delta) { padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta); applyAndSync(); }
-    function stepPadY(delta) { const el = document.getElementById('padYInput'); el.value = Math.max(0, (parseInt(el.value, 10) || 0) + delta); applyAndSync(); }
+    function stepPadY(delta) { padYInput.value = Math.max(0, (parseInt(padYInput.value, 10) || 0) + delta); applyAndSync(); }
     function stepSize(delta) { const input = document.getElementById('fontSizeInput'); input.value = Math.min(Math.max((parseInt(input.value, 10) || 48) + delta, 12), 140); applyAndSync(); }
     function updateWordCount() { if (editor) wordCount.innerText = getCleanText().replace(/\s/g, '').length; }
     function changeTheme(themeName) { document.body.setAttribute('data-theme', themeName); }
@@ -818,9 +800,9 @@
       if (!qrcodeInstance) qrcodeInstance = new QRCode(document.getElementById('modalQrBox'), { text: audienceUrl, width: 180, height: 180, colorDark : "#0f172a", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.M });
     }
     function closeQrModal(e) { document.getElementById('qrModal').classList.remove('active'); }
-    function copyAudienceLink() { navigator.clipboard.writeText(audienceUrl); alert('已複製觀眾連結！'); }
+    function copyAudienceLink() { navigator.clipboard.writeText(audienceUrl); alert('已複製連結'); }
 
-    // --- AI 語音模組 ---
+    // --- AI 語音辨識模組 ---
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
