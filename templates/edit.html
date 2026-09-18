@@ -23,13 +23,13 @@
     .size-input { width: 54px; text-align: center; }
     .btn-step, .btn { padding: 4px 7px; border: 1px solid #555; background: #333; color: #fff; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 11px; }
     .btn-step:hover, .btn:hover { background: #444; }
-    .btn { padding: 6px 14px; border-radius: 6px; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
-    .btn-blue { background: #2563eb; border: none; } .btn-blue:hover { background: #1d4ed8; }
-    .btn-green { background: #16a34a; border: none; } .btn-green:hover { background: #15803d; }
-    .btn-purple { background: #7c3aed; border: none; } .btn-purple:hover { background: #6d28d9; }
-    .btn-export { background: #d97706; border: none; } .btn-export:hover { background: #b45309; }
-    .btn-danger { background: #dc2626; border: none; } .btn-danger:hover { background: #b91c1c; }
-    .btn-dark { background: #334155; border: none; } .btn-dark:hover { background: #475569; }
+    .btn { padding: 6px 14px; border-radius: 6px; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+    .btn-blue { background: #2563eb; border: none; color: #fff; } .btn-blue:hover { background: #1d4ed8; }
+    .btn-green { background: #16a34a; border: none; color: #fff; } .btn-green:hover { background: #15803d; }
+    .btn-purple { background: #7c3aed; border: none; color: #fff; } .btn-purple:hover { background: #6d28d9; }
+    .btn-export { background: #d97706; border: none; color: #fff; } .btn-export:hover { background: #b45309; }
+    .btn-danger { background: #dc2626; border: none; color: #fff; } .btn-danger:hover { background: #b91c1c; }
+    .btn-dark { background: #334155; border: none; color: #fff; } .btn-dark:hover { background: #475569; }
     .btn-master-role { font-weight: bold; transition: all 0.2s; }
     .btn-master-role.active { background: #15803d; color: #f0fdf4; border: 1px solid #22c55e; cursor: default; }
     .btn-master-role.inactive { background: #3f3f46; color: #fde047; border: 1px solid #71717a; }
@@ -44,22 +44,26 @@
     #vuFill { width: 0%; height: 100%; background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%); transition: width 0.04s ease-out; }
 
     .editor-wrapper { flex: 1; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
-    /* 容器負責產生捲軸，我們在此捕捉捲動高度 */
-    .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; padding-bottom: 60px; }
+    
+    /* 外層容器負責滾動，高度100%填滿 */
+    .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; cursor: text; }
 
+    /* 內層編輯器根據文字自然長大，不設 min-height，讓紅線緊緊跟在下方 */
     #editor {
-      min-height: 100%; padding: 16px 8px 10px 8px;
+      padding: 16px 8px 10px 8px;
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
       font-size: 48px; line-height: 1.25; letter-spacing: 0px; color: var(--text-color) !important;
       caret-color: var(--caret-color); white-space: pre-wrap; word-break: break-all;
       text-align: justify; outline: none; position: relative; z-index: 10;
     }
 
-    /* 紅線絕對定位在容器中，它的 top 會跟隨數學算出的實體像素 */
+    /* 🌟 原生排版跟隨的紅線，不依賴任何 JS，底部預留 60px 的喘息空間 */
     #endLineMarker {
-      position: absolute; left: 8px; right: 8px; height: 22px; border-top: 1px dashed rgba(239, 68, 68, 0.7); display: flex; align-items: center; justify-content: flex-end; pointer-events: none; z-index: 15; user-select: none;
+      display: flex; align-items: center; justify-content: flex-end;
+      height: 22px; margin: 0 8px 60px 8px;
+      border-top: 1px dashed rgba(239, 68, 68, 0.7); pointer-events: none; user-select: none; opacity: 0.9;
     }
-    #endLineMarker span { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #ef4444; font-size: 11px; font-family: monospace; font-weight: bold; padding: 1px 6px; border-radius: 3px; margin-top: -12px; letter-spacing: 1px; }
+    #endLineMarker span { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #ef4444; font-size: 11px; font-family: monospace; font-weight: bold; padding: 1px 6px; border-radius: 3px; margin-top: -24px; letter-spacing: 1px; }
 
     .remote-comp { color: inherit; border-bottom: 1px dashed #71717a; pointer-events: none; }
     .remote-cursor { position: absolute; width: 3px; pointer-events: none; z-index: 50; display: none; transition: opacity 0.3s ease; }
@@ -173,6 +177,7 @@
 
     <div class="editor-container" id="editorContainer">
       <div id="editor" contenteditable="true" spellcheck="false"></div>
+      <!-- 紅線自然跟隨在編輯器下方 -->
       <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="remoteCursorsContainer"></div>
     </div>
@@ -211,9 +216,9 @@
   </div>
 
   <script>
-    // 🌟 保證所有 UI 變數正常載入，絕不報錯
+    // 🌟 1. 全域變數鎖定 (保證 QR Code 與外連 100% 正常)
     const roomId = "{{ room_id }}";
-    const audienceUrl = window.location.origin + '/view/' + roomId; // 補回關鍵網址變數！
+    const audienceUrl = window.location.origin + '/view/' + roomId;
 
     let myClientId = sessionStorage.getItem('STT_CLIENT_ID');
     if (!myClientId) {
@@ -253,7 +258,31 @@
     let liveTypingTimer = null;
     let lastSentCursor = -1;
 
-    // 🌟 1. 攔截換行與貼上
+    // 🌟 2. 點擊空白處自動聚焦防呆機制
+    editorContainer.addEventListener('click', (e) => {
+        if (e.target === editorContainer || e.target === endLineMarker) {
+            editor.focus();
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(editor);
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+    });
+
+    // 🌟 3. 補回主投影切換與清空指令
+    function requestMasterRole() {
+      socket.emit('claim_master', { room: roomId, client_id: myClientId });
+    }
+
+    function confirmClearCanvas() {
+      if (confirm('警告：將清空所有人的畫布！確定嗎？')) {
+        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, is_clear: true });
+      }
+    }
+
+    // 🌟 4. 攔截換行與貼上，強制純文字，防段落不同步
     editor.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
         if (e.isComposing || isComposing) return;
@@ -286,7 +315,7 @@
       broadcastCursorOnly();
     }
 
-    // 🌟 2. 乾淨字串萃取器 (拋棄高階 Filter 避免瀏覽器崩潰)
+    // 🌟 5. 乾淨字串萃取器 (拋棄高階 Filter 避免瀏覽器崩潰)
     function getCleanText() {
       let text = '';
       const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
@@ -308,7 +337,7 @@
       return text;
     }
 
-    // 🌟 3. 精準游標捕捉器
+    // 🌟 6. 精準游標捕捉器
     function getCaret() {
       const sel = window.getSelection();
       if (!sel.rangeCount) return lastSentCursor > -1 ? lastSentCursor : 0;
@@ -391,7 +420,7 @@
       }
     }
 
-    // 🌟 4. DOM 手術刀
+    // 🌟 7. DOM 手術刀
     function applyInsert(pos, text) {
       const parts = text.split('\n');
       let currentPos = pos;
@@ -441,7 +470,6 @@
       }
     }
 
-    // 🌟 5. 行內注音實體推移
     function updateRemoteComp(cid, pos, text) {
       let span = document.getElementById('comp-' + cid);
       if (!text || text.trim() === '') {
@@ -468,31 +496,6 @@
       span.textContent = text;
     }
 
-    // 🌟 6. 防墜落紅線 (導入正確的 scrollTop 物理座標換算)
-    function updateEndLinePosition() {
-      if (!editor || !editorContainer) return;
-      
-      const probe = document.createTextNode('\u200B'); // 零寬度探針，絕不影響排版換行
-      editor.appendChild(probe);
-
-      const range = document.createRange();
-      range.setStart(probe, 0);
-      range.setEnd(probe, 1);
-      const rect = range.getBoundingClientRect();
-      const edRect = editorContainer.getBoundingClientRect();
-      
-      let bottomY = parseFloat(window.getComputedStyle(editor).paddingTop) || 16;
-      if (rect.height !== 0) {
-          // 將可視範圍的絕對座標，加上容器捲軸的滑動距離，完美換算成網頁中的物理距離
-          bottomY = (rect.bottom - edRect.top) + editorContainer.scrollTop; 
-      }
-      probe.remove();
-
-      endLineMarker.style.top = bottomY + 'px';
-      endLineMarker.style.left = (parseFloat(padXInput.value) || 8) + 'px';
-      endLineMarker.style.width = (editorContainer.clientWidth - ((parseFloat(padXInput.value)||8)*2)) + 'px';
-    }
-
     function renderSingleRemoteCursor(cid) {
       const item = remoteCursors.get(cid);
       if (!item || !editor) return;
@@ -510,7 +513,7 @@
 
       if (node !== editor && targetIndex > 0) {
         const range = document.createRange();
-        const edRect = editorContainer.getBoundingClientRect(); // 使用外部容器測量
+        const edRect = editorContainer.getBoundingClientRect(); // 絕對綁定容器位置
 
         if (offset > 0 && node.nodeType === Node.TEXT_NODE) {
           range.setStart(node, offset - 1);
@@ -550,7 +553,6 @@
       for (const cid of remoteCursors.keys()) renderSingleRemoteCursor(cid);
     }
 
-    // 🌟 7. 防抖引擎
     let isRenderScheduled = false;
     function scheduleUIRender() {
       if (!isRenderScheduled) {
@@ -558,7 +560,6 @@
         requestAnimationFrame(() => {
           try {
             redrawAllRemoteCursors();
-            updateEndLinePosition();
           } catch(e) { console.error(e); }
           isRenderScheduled = false;
         });
@@ -685,6 +686,7 @@
       updateRemoteComp(data.client_id, data.cursor_index, data.composing_text);
       const renderPos = data.composing_text.length > 0 ? data.cursor_index + data.composing_text.length : data.cursor_index;
       updateRemoteCursor(data.client_id, renderPos);
+      scheduleUIRender();
     });
 
     editor.addEventListener('compositionstart', () => { isComposing = true; broadcastLiveTyping('...'); });
@@ -751,7 +753,7 @@
         if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
         if (data.settings.scale) scaleInput.value = data.settings.scale;
         if (data.settings.pad_x) padXInput.value = data.settings.pad_x;
-        if (data.settings.pad_y) padYInput.value = data.settings.pad_y;
+        if (data.settings.pad_y) document.getElementById('padYInput').value = data.settings.pad_y;
         applyLocalStyle();
       }
     });
@@ -791,17 +793,20 @@
 
     // --- 工具列與 UI 功能 ---
     window.addEventListener('resize', scheduleUIRender);
-    // 🌟 將滾動事件綁定在正確的外層容器上，確保捲動時紅線和游標即時跟隨
-    editorContainer.addEventListener('scroll', scheduleUIRender);
+    editorContainer.addEventListener('scroll', scheduleUIRender); // 綁定在外層確保游標捲動
 
     function applyLocalStyle() {
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      editor.style.padding = `${py} ${px} 60px ${px}`;
+      editor.style.padding = `${py} ${px} 10px ${px}`;
       editor.style.zoom = scaleVal;
+      // 讓紅線跟隨 paddingX 縮放對齊
+      endLineMarker.style.marginLeft = px;
+      endLineMarker.style.marginRight = px;
       scheduleUIRender();
     }
+
     function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { room: roomId, client_id: myClientId, theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(padYInput.value, 10) }); }
     function stepScale(delta) { scaleInput.value = Math.min(Math.max((parseInt(scaleInput.value, 10) || 100) + delta, 40), 250); applyAndSync(); }
     function stepPadX(delta) { padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta); applyAndSync(); }
@@ -811,13 +816,10 @@
     function changeTheme(themeName) { document.body.setAttribute('data-theme', themeName); }
     function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
     function toggleFullscreen() { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{}); else document.exitFullscreen(); }
-    
-    // 🌟 保證這些外部連結功能絕對能運作
     function openAudienceView() { window.open(audienceUrl, '_blank', 'width=1000,height=700'); }
     function copyLink() { navigator.clipboard.writeText(window.location.href); alert('已複製共筆連結'); }
     function toggleExportMenu() { document.getElementById('exportMenu').classList.toggle('show-menu'); }
     window.addEventListener('click', (e) => { if (!e.target.matches('.btn-export')) document.getElementById('exportMenu').classList.remove('show-menu'); });
-    
     function exportTxt() {
       const text = getCleanText().trimEnd();
       if (!text) { alert('目前無內容！'); return; }
