@@ -37,7 +37,7 @@
       if (!isRenderScheduled) {
         isRenderScheduled = true;
         requestAnimationFrame(() => {
-          renderAudienceView();
+          try { renderAudienceView(); } catch(e) {}
           isRenderScheduled = false;
         });
       }
