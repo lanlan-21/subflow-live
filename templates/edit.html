@@ -45,10 +45,10 @@
 
     .editor-wrapper { flex: 1; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
     
-    /* 外層容器負責滾動，高度100%填滿 */
+    /* 容器負責產生捲軸，點擊容器空白處會自動聚焦編輯區 */
     .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; cursor: text; }
 
-    /* 內層編輯器根據文字自然長大，不設 min-height，讓紅線緊緊跟在下方 */
+    /* 內層編輯區：拔除所有 min-height，高度自然隨文字撐開 */
     #editor {
       padding: 16px 8px 10px 8px;
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
@@ -57,10 +57,10 @@
       text-align: justify; outline: none; position: relative; z-index: 10;
     }
 
-    /* 🌟 原生排版跟隨的紅線，不依賴任何 JS，底部預留 60px 的喘息空間 */
+    /* 🌟 極簡原生紅線：不依賴 JS 運算，以一般元素姿態緊跟在編輯區正下方 */
     #endLineMarker {
       display: flex; align-items: center; justify-content: flex-end;
-      height: 22px; margin: 0 8px 60px 8px;
+      height: 22px; margin: 0 8px 60px 8px; /* 下方強制留白 60px 喘息空間 */
       border-top: 1px dashed rgba(239, 68, 68, 0.7); pointer-events: none; user-select: none; opacity: 0.9;
     }
     #endLineMarker span { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #ef4444; font-size: 11px; font-family: monospace; font-weight: bold; padding: 1px 6px; border-radius: 3px; margin-top: -24px; letter-spacing: 1px; }
@@ -153,6 +153,7 @@
       <button class="btn-step" onclick="stepPadY(-2)">-2</button>
     </div>
 
+    <!-- 補回主投影切換權限與清空按鈕，100%可點擊 -->
     <button id="masterToggleBtn" class="btn btn-master-role active" onclick="requestMasterRole()">🔒 主投影</button>
     <button class="btn btn-dark" onclick="toggleToolbar(false)">▲ 收起</button>
     <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
@@ -177,7 +178,7 @@
 
     <div class="editor-container" id="editorContainer">
       <div id="editor" contenteditable="true" spellcheck="false"></div>
-      <!-- 紅線自然跟隨在編輯器下方 -->
+      <!-- 廢除所有紅線JS計算，以最原生方式緊跟在編輯區下方 -->
       <div id="endLineMarker"><span>--- END ---</span></div>
       <div id="remoteCursorsContainer"></div>
     </div>
@@ -216,7 +217,7 @@
   </div>
 
   <script>
-    // 🌟 1. 全域變數鎖定 (保證 QR Code 與外連 100% 正常)
+    // 🌟 1. 全域變數鎖定與點擊防呆
     const roomId = "{{ room_id }}";
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
@@ -252,13 +253,14 @@
     let serverVersion = 0;
     
     let localShadowText = "";
-    let inFlightOp = null;
-    let bufferOps = [];
+    let bufferOps = []; // 嚴格 OT 隊列陣列
+    let inFlightOp = null; // 當前發送中的操作
+    
     const remoteCursors = new Map();
     let liveTypingTimer = null;
     let lastSentCursor = -1;
 
-    // 🌟 2. 點擊空白處自動聚焦防呆機制
+    // 🌟 全區點擊攔截：點擊紅線或下方空白處，一秒跳回最後一個字
     editorContainer.addEventListener('click', (e) => {
         if (e.target === editorContainer || e.target === endLineMarker) {
             editor.focus();
@@ -271,7 +273,7 @@
         }
     });
 
-    // 🌟 3. 補回主投影切換與清空指令
+    // 🌟 補回缺失的功能指令
     function requestMasterRole() {
       socket.emit('claim_master', { room: roomId, client_id: myClientId });
     }
@@ -282,7 +284,7 @@
       }
     }
 
-    // 🌟 4. 攔截換行與貼上，強制純文字，防段落不同步
+    // 🌟 2. 攔截換行與貼上，強制純文字排版，保證段落不斷線
     editor.addEventListener('keydown', e => {
       if (e.key === 'Enter') {
         if (e.isComposing || isComposing) return;
@@ -315,7 +317,7 @@
       broadcastCursorOnly();
     }
 
-    // 🌟 5. 乾淨字串萃取器 (拋棄高階 Filter 避免瀏覽器崩潰)
+    // 🌟 3. 防崩潰字串萃取器
     function getCleanText() {
       let text = '';
       const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
@@ -337,7 +339,7 @@
       return text;
     }
 
-    // 🌟 6. 精準游標捕捉器
+    // 🌟 4. 座標游標鎖定器
     function getCaret() {
       const sel = window.getSelection();
       if (!sel.rangeCount) return lastSentCursor > -1 ? lastSentCursor : 0;
@@ -420,7 +422,7 @@
       }
     }
 
-    // 🌟 7. DOM 手術刀
+    // 🌟 5. 外科手術級 DOM 替換 (保護輸入法不閃爍)
     function applyInsert(pos, text) {
       const parts = text.split('\n');
       let currentPos = pos;
@@ -470,6 +472,7 @@
       }
     }
 
+    // 行內實體注音推移 (解決藍字殘留)
     function updateRemoteComp(cid, pos, text) {
       let span = document.getElementById('comp-' + cid);
       if (!text || text.trim() === '') {
@@ -496,6 +499,7 @@
       span.textContent = text;
     }
 
+    // 遠端游標渲染 (唯一保留的絕對座標)
     function renderSingleRemoteCursor(cid) {
       const item = remoteCursors.get(cid);
       if (!item || !editor) return;
@@ -513,7 +517,7 @@
 
       if (node !== editor && targetIndex > 0) {
         const range = document.createRange();
-        const edRect = editorContainer.getBoundingClientRect(); // 絕對綁定容器位置
+        const edRect = editorContainer.getBoundingClientRect(); 
 
         if (offset > 0 && node.nodeType === Node.TEXT_NODE) {
           range.setStart(node, offset - 1);
@@ -558,16 +562,13 @@
       if (!isRenderScheduled) {
         isRenderScheduled = true;
         requestAnimationFrame(() => {
-          try {
-            redrawAllRemoteCursors();
-          } catch(e) { console.error(e); }
+          try { redrawAllRemoteCursors(); } catch(e) { console.error(e); }
           isRenderScheduled = false;
         });
       }
     }
 
-    // --- OT 資料流同步 ---
-
+    // 🌟 6. 頂級 OT 嚴格隊列系統 (永不斷線死機的關鍵)
     function getAtomicOps(oldText, newText) {
       if (oldText === newText) return [];
       let prefix = 0, suffix = 0;
@@ -581,6 +582,14 @@
       return ops;
     }
 
+    function sendNextOp() {
+      // 確保上一個修改已經被伺服器確認，才送出下一個，從根本上消滅打包引發的算字錯誤
+      if (inFlightOp === null && bufferOps.length > 0) {
+        inFlightOp = bufferOps.shift();
+        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, ops: [inFlightOp] });
+      }
+    }
+
     function handleLocalTyping() {
       const currentText = getCleanText();
       if (currentText === localShadowText) return; 
@@ -588,12 +597,8 @@
       localShadowText = currentText;
       
       if (ops.length > 0) {
-        for (const op of ops) {
-          if (inFlightOp === null) {
-            inFlightOp = op;
-            socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, ops: [op] });
-          } else { bufferOps.push(op); }
-        }
+        for (const op of ops) bufferOps.push(op);
+        sendNextOp(); // 觸發發送隊列
       }
       wordCount.innerText = currentText.replace(/\s/g, '').length;
       scheduleUIRender();
@@ -601,13 +606,8 @@
 
     socket.on('ack_operation', data => {
       serverVersion = data.version;
-      inFlightOp = null;
-      if (bufferOps.length > 0) {
-        const opsToSend = bufferOps;
-        bufferOps = [];
-        inFlightOp = { type: 'batch', count: opsToSend.length };
-        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, ops: opsToSend });
-      }
+      inFlightOp = null; // 解除鎖定，允許下一筆資料發送
+      sendNextOp();
     });
 
     function transformOp(op1, op2, priority) {
@@ -640,7 +640,7 @@
 
       for (let rOp of remoteOps) {
         let transformedRemote = rOp;
-        if (inFlightOp && inFlightOp.type !== 'batch') {
+        if (inFlightOp) {
           transformedRemote = transformOp(transformedRemote, inFlightOp, 'right');
           inFlightOp = transformOp(inFlightOp, rOp, 'left');
         }
@@ -793,7 +793,7 @@
 
     // --- 工具列與 UI 功能 ---
     window.addEventListener('resize', scheduleUIRender);
-    editorContainer.addEventListener('scroll', scheduleUIRender); // 綁定在外層確保游標捲動
+    editorContainer.addEventListener('scroll', scheduleUIRender); 
 
     function applyLocalStyle() {
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
@@ -801,7 +801,7 @@
       editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
       editor.style.padding = `${py} ${px} 10px ${px}`;
       editor.style.zoom = scaleVal;
-      // 讓紅線跟隨 paddingX 縮放對齊
+      
       endLineMarker.style.marginLeft = px;
       endLineMarker.style.marginRight = px;
       scheduleUIRender();
@@ -816,6 +816,7 @@
     function changeTheme(themeName) { document.body.setAttribute('data-theme', themeName); }
     function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
     function toggleFullscreen() { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{}); else document.exitFullscreen(); }
+    
     function openAudienceView() { window.open(audienceUrl, '_blank', 'width=1000,height=700'); }
     function copyLink() { navigator.clipboard.writeText(window.location.href); alert('已複製共筆連結'); }
     function toggleExportMenu() { document.getElementById('exportMenu').classList.toggle('show-menu'); }
