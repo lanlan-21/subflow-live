@@ -44,6 +44,7 @@
     #vuFill { width: 0%; height: 100%; background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%); transition: width 0.04s ease-out; }
 
     .editor-wrapper { flex: 1; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
+    /* 容器負責產生捲軸，我們在此捕捉捲動高度 */
     .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; padding-bottom: 60px; }
 
     #editor {
@@ -54,6 +55,7 @@
       text-align: justify; outline: none; position: relative; z-index: 10;
     }
 
+    /* 紅線絕對定位在容器中，它的 top 會跟隨數學算出的實體像素 */
     #endLineMarker {
       position: absolute; left: 8px; right: 8px; height: 22px; border-top: 1px dashed rgba(239, 68, 68, 0.7); display: flex; align-items: center; justify-content: flex-end; pointer-events: none; z-index: 15; user-select: none;
     }
@@ -209,6 +211,10 @@
   </div>
 
   <script>
+    // 🌟 保證所有 UI 變數正常載入，絕不報錯
+    const roomId = "{{ room_id }}";
+    const audienceUrl = window.location.origin + '/view/' + roomId; // 補回關鍵網址變數！
+
     let myClientId = sessionStorage.getItem('STT_CLIENT_ID');
     if (!myClientId) {
       myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
@@ -216,7 +222,6 @@
     }
 
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
-    const roomId = "{{ room_id }}";
     
     const editor = document.getElementById('editor');
     const editorContainer = document.getElementById('editorContainer');
@@ -281,7 +286,7 @@
       broadcastCursorOnly();
     }
 
-    // 🌟 2. 最純淨的手動防呆過濾萃取器 (永不拋錯)
+    // 🌟 2. 乾淨字串萃取器 (拋棄高階 Filter 避免瀏覽器崩潰)
     function getCleanText() {
       let text = '';
       const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
@@ -386,7 +391,7 @@
       }
     }
 
-    // 🌟 4. DOM 手術刀 (OT 同步專用，完全不破壞輸入法狀態)
+    // 🌟 4. DOM 手術刀
     function applyInsert(pos, text) {
       const parts = text.split('\n');
       let currentPos = pos;
@@ -436,7 +441,7 @@
       }
     }
 
-    // 🌟 5. 行內實體推移 (解決藍色小字，無縫推開句子)
+    // 🌟 5. 行內注音實體推移
     function updateRemoteComp(cid, pos, text) {
       let span = document.getElementById('comp-' + cid);
       if (!text || text.trim() === '') {
@@ -454,7 +459,7 @@
         } else if (node.nodeType === Node.TEXT_NODE) {
           range.setStart(node, offset);
           range.insertNode(span);
-        } else if (node.nodeName === 'BR') {
+        } else if (node.tagName === 'BR') {
           node.parentNode.insertBefore(span, node);
         } else {
           editor.appendChild(span);
@@ -463,29 +468,29 @@
       span.textContent = text;
     }
 
-    // 🌟 6. 防墜落紅線，使用絕對物理測量保證精準錨定
+    // 🌟 6. 防墜落紅線 (導入正確的 scrollTop 物理座標換算)
     function updateEndLinePosition() {
-      if (!editor) return;
+      if (!editor || !editorContainer) return;
       
-      // 使用零寬度字元作為物理探針，絕對不會被排版引擎擠到下一行
-      const probe = document.createTextNode('\u200B');
+      const probe = document.createTextNode('\u200B'); // 零寬度探針，絕不影響排版換行
       editor.appendChild(probe);
 
       const range = document.createRange();
       range.setStart(probe, 0);
       range.setEnd(probe, 1);
       const rect = range.getBoundingClientRect();
-      const edRect = editor.getBoundingClientRect();
+      const edRect = editorContainer.getBoundingClientRect();
       
       let bottomY = parseFloat(window.getComputedStyle(editor).paddingTop) || 16;
       if (rect.height !== 0) {
-          bottomY = rect.bottom - edRect.top; // 直接算出距離頂部的實體像素
+          // 將可視範圍的絕對座標，加上容器捲軸的滑動距離，完美換算成網頁中的物理距離
+          bottomY = (rect.bottom - edRect.top) + editorContainer.scrollTop; 
       }
       probe.remove();
 
       endLineMarker.style.top = bottomY + 'px';
       endLineMarker.style.left = (parseFloat(padXInput.value) || 8) + 'px';
-      endLineMarker.style.width = (editor.clientWidth - ((parseFloat(padXInput.value)||8)*2)) + 'px';
+      endLineMarker.style.width = (editorContainer.clientWidth - ((parseFloat(padXInput.value)||8)*2)) + 'px';
     }
 
     function renderSingleRemoteCursor(cid) {
@@ -505,33 +510,32 @@
 
       if (node !== editor && targetIndex > 0) {
         const range = document.createRange();
+        const edRect = editorContainer.getBoundingClientRect(); // 使用外部容器測量
+
         if (offset > 0 && node.nodeType === Node.TEXT_NODE) {
           range.setStart(node, offset - 1);
           range.setEnd(node, offset);
           const rect = range.getBoundingClientRect();
-          const edRect = editor.getBoundingClientRect();
           const charStr = node.nodeValue.charAt(offset - 1);
           if (charStr === '\n') {
             targetX = parseFloat(cs.paddingLeft) || 8;
-            targetY = rect.bottom - edRect.top + editor.scrollTop;
+            targetY = (rect.bottom - edRect.top) + editorContainer.scrollTop;
           } else {
             targetX = rect.right - edRect.left;
-            targetY = rect.top - edRect.top + editor.scrollTop;
+            targetY = (rect.top - edRect.top) + editorContainer.scrollTop;
           }
         } else if (node.nodeName === 'BR') {
           range.setStartBefore(node);
           range.collapse(true);
           const rect = range.getBoundingClientRect();
-          const edRect = editor.getBoundingClientRect();
           targetX = rect.left - edRect.left;
-          targetY = rect.top - edRect.top + editor.scrollTop;
+          targetY = (rect.top - edRect.top) + editorContainer.scrollTop;
         } else {
           range.setStart(node, offset);
           range.collapse(true);
           const rect = range.getBoundingClientRect();
-          const edRect = editor.getBoundingClientRect();
           targetX = rect.left - edRect.left;
-          targetY = rect.top - edRect.top + editor.scrollTop;
+          targetY = (rect.top - edRect.top) + editorContainer.scrollTop;
         }
       }
 
@@ -546,7 +550,7 @@
       for (const cid of remoteCursors.keys()) renderSingleRemoteCursor(cid);
     }
 
-    // 🌟 7. 防抖引擎，絕對不會卡死
+    // 🌟 7. 防抖引擎
     let isRenderScheduled = false;
     function scheduleUIRender() {
       if (!isRenderScheduled) {
@@ -752,7 +756,6 @@
       }
     });
 
-    // 🌟 確保 UI 文字完全更新，不再卡住
     socket.on('role_status_update', data => {
       const totalEditors = data.total_editors || 1;
       document.getElementById('viewerCountText').innerText = data.total_viewers || 0;
@@ -788,7 +791,8 @@
 
     // --- 工具列與 UI 功能 ---
     window.addEventListener('resize', scheduleUIRender);
-    editor.addEventListener('scroll', scheduleUIRender);
+    // 🌟 將滾動事件綁定在正確的外層容器上，確保捲動時紅線和游標即時跟隨
+    editorContainer.addEventListener('scroll', scheduleUIRender);
 
     function applyLocalStyle() {
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
@@ -807,10 +811,13 @@
     function changeTheme(themeName) { document.body.setAttribute('data-theme', themeName); }
     function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
     function toggleFullscreen() { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{}); else document.exitFullscreen(); }
+    
+    // 🌟 保證這些外部連結功能絕對能運作
     function openAudienceView() { window.open(audienceUrl, '_blank', 'width=1000,height=700'); }
     function copyLink() { navigator.clipboard.writeText(window.location.href); alert('已複製共筆連結'); }
     function toggleExportMenu() { document.getElementById('exportMenu').classList.toggle('show-menu'); }
     window.addEventListener('click', (e) => { if (!e.target.matches('.btn-export')) document.getElementById('exportMenu').classList.remove('show-menu'); });
+    
     function exportTxt() {
       const text = getCleanText().trimEnd();
       if (!text) { alert('目前無內容！'); return; }
@@ -823,7 +830,7 @@
       if (!qrcodeInstance) qrcodeInstance = new QRCode(document.getElementById('modalQrBox'), { text: audienceUrl, width: 180, height: 180, colorDark : "#0f172a", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.M });
     }
     function closeQrModal(e) { document.getElementById('qrModal').classList.remove('active'); }
-    function copyAudienceLink() { navigator.clipboard.writeText(audienceUrl); alert('已複製觀眾免密碼連結！'); }
+    function copyAudienceLink() { navigator.clipboard.writeText(audienceUrl); alert('已複製觀眾連結！'); }
 
     // --- AI 語音辨識模組 ---
     let currentRecInstance = null;
