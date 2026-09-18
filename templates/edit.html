@@ -2,113 +2,935 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
-  <title>觀眾大螢幕 - 頻道 {{ room_id }}</title>
+  <title>聽打工作台 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     * { box-sizing: border-box; }
-    body {
-      margin: 0; background: #0a0a0a; color: #ffff33;
-      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", serif;
-      height: 100vh; display: flex; flex-direction: column; overflow: hidden;
-      transition: background 0.2s ease, color 0.2s ease;
+    body[data-theme="dark"] { --bg-main: #0a0a0a; --bg-editor: #121212; --text-color: #ffff33; --caret-color: #ffff33; }
+    body[data-theme="green"] { --bg-main: #c7edcc; --bg-editor: #d2edd2; --text-color: #111827; --caret-color: #047857; }
+    body[data-theme="navy"] { --bg-main: #0b132b; --bg-editor: #1c2541; --text-color: #e0e1dd; --caret-color: #38bdf8; }
+    body[data-theme="light"] { --bg-main: #f1f5f9; --bg-editor: #ffffff; --text-color: #0f172a; --caret-color: #0f172a; }
+
+    body { margin: 0; display: flex; flex-direction: column; height: 100vh; background: var(--bg-main); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; overflow: hidden; transition: background 0.2s ease, color 0.2s ease; }
+    .toolbar { display: flex; gap: 8px; padding: 8px 16px; background: #1e1e1e; border-bottom: 1px solid #333; align-items: center; flex-wrap: wrap; z-index: 100; transition: transform 0.25s ease; }
+    #topHoverTrigger { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 12px; z-index: 150; }
+    body.toolbar-hidden #topHoverTrigger { display: block; }
+    body.toolbar-hidden .toolbar { position: fixed; top: 0; left: 0; width: 100%; transform: translateY(-100%); box-shadow: 0 4px 16px rgba(0,0,0,0.7); }
+    body.toolbar-hidden .toolbar:hover, body.toolbar-hidden #topHoverTrigger:hover + .toolbar { transform: translateY(0); }
+    .control-group { display: flex; align-items: center; gap: 4px; font-size: 13px; color: #e2e8f0; }
+    select, input[type="number"] { padding: 4px 6px; border: 1px solid #555; border-radius: 4px; background: #2a2a2a; color: #fff; font-size: 13px; outline: none; }
+    .size-input { width: 54px; text-align: center; }
+    .btn-step, .btn { padding: 4px 7px; border: 1px solid #555; background: #333; color: #fff; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 11px; }
+    .btn-step:hover, .btn:hover { background: #444; }
+    .btn { padding: 6px 14px; border-radius: 6px; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+    .btn-blue { background: #2563eb; border: none; color: #fff; } .btn-blue:hover { background: #1d4ed8; }
+    .btn-green { background: #16a34a; border: none; color: #fff; } .btn-green:hover { background: #15803d; }
+    .btn-purple { background: #7c3aed; border: none; color: #fff; } .btn-purple:hover { background: #6d28d9; }
+    .btn-export { background: #d97706; border: none; color: #fff; } .btn-export:hover { background: #b45309; }
+    .btn-danger { background: #dc2626; border: none; color: #fff; } .btn-danger:hover { background: #b91c1c; }
+    .btn-dark { background: #334155; border: none; color: #fff; } .btn-dark:hover { background: #475569; }
+    .btn-master-role { font-weight: bold; transition: all 0.2s; }
+    .btn-master-role.active { background: #15803d; color: #f0fdf4; border: 1px solid #22c55e; cursor: default; }
+    .btn-master-role.inactive { background: #3f3f46; color: #fde047; border: 1px solid #71717a; }
+    .btn-master-role.inactive:hover { background: #d97706; color: #fff; }
+
+    .btn-ai { background: #0284c7; color: #fff; border: none; transition: all 0.2s ease; }
+    .btn-ai:hover { background: #0369a1; }
+    .btn-ai.recording { background: #dc2626 !important; box-shadow: 0 0 10px rgba(220, 38, 38, 0.6); }
+
+    .mic-control-box { display: flex; align-items: center; gap: 6px; background: #27272a; padding: 3px 8px; border-radius: 6px; border: 1px solid #444; }
+    .vu-meter-bar { width: 50px; height: 9px; background: #18181b; border-radius: 4px; overflow: hidden; border: 1px solid #52525b; }
+    #vuFill { width: 0%; height: 100%; background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%); transition: width 0.04s ease-out; }
+
+    .editor-wrapper { flex: 1; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
+    
+    /* 外層容器負責滾動，高度100%填滿 */
+    .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; cursor: text; }
+
+    /* 內層編輯器根據文字自然長大，不設 min-height，讓紅線緊緊跟在下方 */
+    #editor {
+      padding: 16px 8px 10px 8px;
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
+      font-size: 48px; line-height: 1.25; letter-spacing: 0px; color: var(--text-color) !important;
+      caret-color: var(--caret-color); white-space: pre-wrap; word-break: break-all;
+      text-align: justify; outline: none; position: relative; z-index: 10;
     }
-    #viewerContainer {
-      flex: 1; padding: 16px 8px 60px 8px; font-size: 48px; line-height: 1.25;
-      white-space: pre-wrap; word-break: break-all; overflow-y: auto; text-align: justify;
+
+    /* 🌟 原生排版跟隨的紅線，不依賴任何 JS，底部預留 60px 的喘息空間 */
+    #endLineMarker {
+      display: flex; align-items: center; justify-content: flex-end;
+      height: 22px; margin: 0 8px 60px 8px;
+      border-top: 1px dashed rgba(239, 68, 68, 0.7); pointer-events: none; user-select: none; opacity: 0.9;
     }
-    .remote-comp {
-      color: inherit; border-bottom: 1px dashed rgba(255, 255, 255, 0.4); opacity: 0.85;
-    }
+    #endLineMarker span { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #ef4444; font-size: 11px; font-family: monospace; font-weight: bold; padding: 1px 6px; border-radius: 3px; margin-top: -24px; letter-spacing: 1px; }
+
+    .remote-comp { color: inherit; border-bottom: 1px dashed #71717a; pointer-events: none; }
+    .remote-cursor { position: absolute; width: 3px; pointer-events: none; z-index: 50; display: none; transition: opacity 0.3s ease; }
+    .remote-cursor-tag { position: absolute; top: -24px; left: -2px; color: #fff; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); z-index: 60; }
+
+    .statusbar { padding: 6px 16px; background: #1e1e1e; border-top: 1px solid #333; font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; z-index: 100; flex-wrap: wrap; gap: 8px; }
+    .status-left-box { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .save-alert-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; background: rgba(217, 119, 6, 0.2); border: 1px solid #d97706; border-radius: 12px; color: #fde68a; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+    .save-alert-badge:hover { background: rgba(217, 119, 6, 0.4); color: #ffffff; }
+    .status-right-box { display: flex; align-items: center; gap: 14px; }
+    .online-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: #27272a; border: 1px solid #444; border-radius: 12px; font-size: 12px; }
+    .online-dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; display: inline-block; box-shadow: 0 0 6px #22c55e; }
+    .viewer-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; background: #172554; border: 1px solid #1e40af; border-radius: 12px; font-size: 12px; color: #bfdbfe; }
+    
+    #aiStreamBar { display: none; padding: 8px 16px; background: #18181b; border-top: 1px solid #3f3f46; color: #e4e4e7; font-size: 14px; align-items: center; gap: 10px; }
+    #aiStreamBar.active { display: flex; }
+    .ai-indicator { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; display: inline-block; animation: blink 1s infinite; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    #aiInterimText { color: #ffff33; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .qr-modal { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(5px); z-index: 2000; align-items: center; justify-content: center; }
+    .qr-modal.active { display: flex; }
+    .qr-card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 24px; text-align: center; max-width: 320px; width: 90%; box-shadow: 0 16px 40px rgba(0,0,0,0.6); }
+    .qr-card h3 { color: #f8fafc; font-size: 18px; margin-bottom: 6px; }
+    .qr-card p { color: #94a3b8; font-size: 13px; margin-bottom: 16px; }
+    #modalQrBox { background: #fff; padding: 12px; border-radius: 12px; display: inline-block; margin-bottom: 16px; }
+    .qr-url-text { background: #0f172a; border: 1px solid #334155; padding: 8px 10px; border-radius: 6px; color: #38bdf8; font-size: 12px; word-break: break-all; margin-bottom: 16px; user-select: all; }
+    #floatingActionGroup { display: none; position: absolute; top: 16px; right: 20px; z-index: 90; gap: 8px; opacity: 0.35; transition: opacity 0.2s; }
+    body.toolbar-hidden:not(.is-fullscreen) #floatingActionGroup { display: flex; }
+    #floatingActionGroup:hover { opacity: 1; }
+    body.is-fullscreen .toolbar, body.is-fullscreen .statusbar, body.is-fullscreen #floatingActionGroup, body.is-fullscreen #topHoverTrigger { display: none !important; }
+    #exitFsBtn { display: none; position: absolute; bottom: 24px; right: 24px; z-index: 999; opacity: 0.25; }
+    #exitFsBtn:hover { opacity: 0.9; }
+    .export-dropdown { position: relative; display: inline-block; }
+    .export-menu { display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background-color: #1e1e1e; border: 1px solid #444; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 1000; min-width: 180px; }
+    .export-menu button { width: 100%; padding: 10px 14px; background: none; border: none; color: #f1f5f9; text-align: left; font-size: 14px; cursor: pointer; }
+    .export-menu button:hover { background-color: #2a2a2a; color: #38bdf8; }
+    .show-menu { display: block; }
   </style>
 </head>
-<body>
-  <div id="viewerContainer">等待聽打員連線...</div>
+<body data-theme="dark">
+
+  <div id="topHoverTrigger"></div>
+
+  <div class="toolbar" id="mainToolbar">
+    <button class="btn btn-ai" id="aiToggleBtn" onclick="toggleAISpeech()">🎙️ 語音辨識</button>
+
+    <div class="control-group" style="background: #27272a; padding: 3px 8px; border-radius: 6px; border: 1px solid #38bdf8;">
+      <label for="themeSelect" style="font-weight: bold; color: #38bdf8;">🎨 底色：</label>
+      <select id="themeSelect" onchange="changeTheme(this.value)" style="font-weight: bold; cursor: pointer; color: #fff;">
+        <option value="dark">⬛ 極致黑 (黃字)</option>
+        <option value="green">🍵 護眼綠 (黑字)</option>
+        <option value="navy">🟦 深海藍 (白字)</option>
+        <option value="light">⬜ 純白底 (黑字)</option>
+      </select>
+    </div>
+
+    <div class="mic-control-box">
+      <div class="vu-meter-bar" title="麥克風音量"><div id="vuFill"></div></div>
+    </div>
+
+    <div class="control-group">
+      <label>字號：</label>
+      <input type="number" id="fontSizeInput" class="size-input" value="48" step="2" onchange="applyAndSync()">
+      <button class="btn-step" onclick="stepSize(2)">A⁺</button>
+      <button class="btn-step" onclick="stepSize(-2)">A⁻</button>
+    </div>
+
+    <div class="control-group">
+      <label>比例：</label>
+      <input type="number" id="scaleInput" class="size-input" value="100" step="5" onchange="applyAndSync()">%
+      <button class="btn-step" onclick="stepScale(5)">+5%</button>
+      <button class="btn-step" onclick="stepScale(-5)">-5%</button>
+    </div>
+
+    <div class="control-group">
+      <label>左右：</label>
+      <input type="number" id="padXInput" class="size-input" value="8" step="2" onchange="applyAndSync()">px
+      <button class="btn-step" onclick="stepPadX(2)">+2</button>
+      <button class="btn-step" onclick="stepPadX(-2)">-2</button>
+    </div>
+
+    <div class="control-group">
+      <label>上下：</label>
+      <input type="number" id="padYInput" class="size-input" value="10" step="2" onchange="applyAndSync()">px
+      <button class="btn-step" onclick="stepPadY(2)">+2</button>
+      <button class="btn-step" onclick="stepPadY(-2)">-2</button>
+    </div>
+
+    <button id="masterToggleBtn" class="btn btn-master-role active" onclick="requestMasterRole()">🔒 主投影</button>
+    <button class="btn btn-dark" onclick="toggleToolbar(false)">▲ 收起</button>
+    <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
+    <button class="btn btn-danger" onclick="confirmClearCanvas()">🗑️ 清空</button>
+
+    <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
+      <button class="btn btn-purple" onclick="openQrModal()">📱 觀眾 QR</button>
+      <div class="export-dropdown">
+        <button class="btn btn-export" onclick="toggleExportMenu()">📥 匯出 ▼</button>
+        <div class="export-menu" id="exportMenu"><button onclick="exportTxt()">📄 純文字檔 (.txt)</button></div>
+      </div>
+      <button class="btn btn-blue" onclick="copyLink()">📋 複製連結</button>
+      <button class="btn btn-green" onclick="openAudienceView()">🖥️ 觀眾端</button>
+    </div>
+  </div>
+
+  <div class="editor-wrapper">
+    <div id="floatingActionGroup">
+      <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
+      <button class="btn btn-dark" onclick="toggleToolbar(true)">⚙ 展開工具</button>
+    </div>
+
+    <div class="editor-container" id="editorContainer">
+      <div id="editor" contenteditable="true" spellcheck="false"></div>
+      <!-- 紅線自然跟隨在編輯器下方 -->
+      <div id="endLineMarker"><span>--- END ---</span></div>
+      <div id="remoteCursorsContainer"></div>
+    </div>
+    
+    <button class="btn" id="exitFsBtn" onclick="toggleFullscreen()">✕ 退出全螢幕 (ESC)</button>
+  </div>
+
+  <div id="aiStreamBar">
+    <span class="ai-indicator" id="aiIndicator"></span>
+    <span id="aiStatusTitle" style="font-weight:600; white-space: nowrap;">AI 即時辨識中：</span>
+    <span id="aiInterimText">請說話，字詞將即時推進編輯區...</span>
+  </div>
+
+  <div class="statusbar">
+    <div class="status-left-box">
+      <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
+      <div class="save-alert-badge" onclick="exportTxt()">⚠️ 結束請務必下載檔案</div>
+    </div>
+    <div class="status-right-box">
+      <div class="viewer-badge"><span>📺 觀眾：</span><strong id="viewerCountText" style="color: #93c5fd;">0</strong></div>
+      <div class="online-badge">
+        <span class="online-dot" id="onlineDot"></span>
+        <span id="onlineCountText">連線中...</span>
+      </div>
+      <div id="modeHintText">身分檢查中...</div>
+    </div>
+  </div>
+
+  <div class="qr-modal" id="qrModal" onclick="closeQrModal(event)">
+    <div class="qr-card" onclick="event.stopPropagation()">
+      <h3>頻道 {{ room_id }} 觀眾掃描碼</h3>
+      <div id="modalQrBox"></div>
+      <div class="qr-url-text" id="modalQrUrl"></div>
+      <button class="btn btn-blue" style="width: 100%; justify-content: center;" onclick="copyAudienceLink()">📋 複製連結</button>
+    </div>
+  </div>
 
   <script>
-    const socket = io({ reconnection: true, reconnectionAttempts: Infinity });
+    // 🌟 1. 全域變數鎖定 (保證 QR Code 與外連 100% 正常)
     const roomId = "{{ room_id }}";
-    const viewerContainer = document.getElementById('viewerContainer');
-    
-    let baseCommittedText = "";
-    const remoteComposingMap = new Map();
-    let isRenderScheduled = false;
+    const audienceUrl = window.location.origin + '/view/' + roomId;
 
+    let myClientId = sessionStorage.getItem('STT_CLIENT_ID');
+    if (!myClientId) {
+      myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
+      sessionStorage.setItem('STT_CLIENT_ID', myClientId);
+    }
+
+    const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
+    
+    const editor = document.getElementById('editor');
+    const editorContainer = document.getElementById('editorContainer');
+    const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
+    const endLineMarker = document.getElementById('endLineMarker');
+    const wordCount = document.getElementById('wordCount');
+    const scaleInput = document.getElementById('scaleInput');
+    const padXInput = document.getElementById('padXInput');
+    const padYInput = document.getElementById('padYInput');
+    const masterToggleBtn = document.getElementById('masterToggleBtn');
+    const modeHintText = document.getElementById('modeHintText');
+    
+    const aiToggleBtn = document.getElementById('aiToggleBtn');
+    const aiStreamBar = document.getElementById('aiStreamBar');
+    const aiStatusTitle = document.getElementById('aiStatusTitle');
+    const aiInterimText = document.getElementById('aiInterimText');
+    const aiIndicator = document.getElementById('aiIndicator');
+    const vuFill = document.getElementById('vuFill');
+
+    let amIMaster = true;
+    let currentMasterClientId = null;
+    let isComposing = false;
+    let serverVersion = 0;
+    
+    let localShadowText = "";
+    let inFlightOp = null;
+    let bufferOps = [];
+    const remoteCursors = new Map();
+    let liveTypingTimer = null;
+    let lastSentCursor = -1;
+
+    // 🌟 2. 點擊空白處自動聚焦防呆機制
+    editorContainer.addEventListener('click', (e) => {
+        if (e.target === editorContainer || e.target === endLineMarker) {
+            editor.focus();
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(editor);
+            range.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+    });
+
+    // 🌟 3. 補回主投影切換與清空指令
+    function requestMasterRole() {
+      socket.emit('claim_master', { room: roomId, client_id: myClientId });
+    }
+
+    function confirmClearCanvas() {
+      if (confirm('警告：將清空所有人的畫布！確定嗎？')) {
+        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, is_clear: true });
+      }
+    }
+
+    // 🌟 4. 攔截換行與貼上，強制純文字，防段落不同步
+    editor.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        if (e.isComposing || isComposing) return;
+        e.preventDefault();
+        insertPureNewline();
+      }
+    });
+
+    editor.addEventListener('paste', e => {
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+      applyInsert(getCaret(), text.replace(/\r\n/g, '\n').replace(/\r/g, '\n'));
+      setCaret(getCaret() + text.length);
+      handleLocalTyping();
+      broadcastCursorOnly();
+    });
+
+    function insertPureNewline() {
+      const sel = window.getSelection();
+      if (!sel.rangeCount) return;
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      const br = document.createElement('br');
+      range.insertNode(br);
+      range.setStartAfter(br);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      handleLocalTyping();
+      broadcastCursorOnly();
+    }
+
+    // 🌟 5. 乾淨字串萃取器 (拋棄高階 Filter 避免瀏覽器崩潰)
+    function getCleanText() {
+      let text = '';
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
+      let node;
+      while ((node = walker.nextNode())) {
+        let skip = false;
+        let p = node.parentNode;
+        while (p && p !== editor) {
+          if (p.classList && (p.classList.contains('remote-comp') || p.classList.contains('remote-cursor'))) { skip = true; break; }
+          p = p.parentNode;
+        }
+        if (node.nodeType === Node.ELEMENT_NODE && node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) skip = true;
+        
+        if (!skip) {
+           if (node.nodeType === Node.TEXT_NODE) text += node.nodeValue;
+           else if (node.nodeName === 'BR') text += '\n';
+        }
+      }
+      return text;
+    }
+
+    // 🌟 6. 精準游標捕捉器
+    function getCaret() {
+      const sel = window.getSelection();
+      if (!sel.rangeCount) return lastSentCursor > -1 ? lastSentCursor : 0;
+      
+      let targetNode = sel.anchorNode;
+      let targetOffset = sel.anchorOffset;
+      if (!editor.contains(targetNode) && targetNode !== editor) return lastSentCursor > -1 ? lastSentCursor : 0;
+      
+      let textLen = 0;
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
+      let node;
+      while ((node = walker.nextNode())) {
+          let skip = false;
+          let p = node.parentNode;
+          while (p && p !== editor) {
+            if (p.classList && (p.classList.contains('remote-comp') || p.classList.contains('remote-cursor'))) { skip = true; break; }
+            p = p.parentNode;
+          }
+          if (node.nodeType === Node.ELEMENT_NODE && node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) skip = true;
+          if (skip) continue;
+
+          if (node === targetNode) {
+              if (node.nodeType === Node.TEXT_NODE) return textLen + targetOffset;
+              else {
+                  let childText = 0;
+                  for (let i = 0; i < targetOffset; i++) {
+                      if (node.childNodes[i]) {
+                          if (node.childNodes[i].nodeName === 'BR') childText += 1;
+                          else if (node.childNodes[i].nodeType === Node.TEXT_NODE) childText += node.childNodes[i].nodeValue.length;
+                      }
+                  }
+                  return textLen + childText;
+              }
+          }
+          if (node.nodeType === Node.TEXT_NODE) textLen += node.nodeValue.length;
+          else if (node.nodeName === 'BR') textLen += 1;
+      }
+      return textLen;
+    }
+
+    function getNodeAt(targetPos) {
+      let offset = 0;
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
+      let node;
+      let lastNode = editor;
+      while ((node = walker.nextNode())) {
+        let skip = false;
+        let p = node.parentNode;
+        while (p && p !== editor) {
+          if (p.classList && (p.classList.contains('remote-comp') || p.classList.contains('remote-cursor'))) { skip = true; break; }
+          p = p.parentNode;
+        }
+        if (node.nodeType === Node.ELEMENT_NODE && node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) skip = true;
+        if (skip) continue;
+
+        if (node.nodeName === 'BR') {
+          if (offset >= targetPos) return { node, offset: 0 };
+          offset += 1;
+          lastNode = node;
+        } else if (node.nodeType === Node.TEXT_NODE) {
+          if (offset + node.nodeValue.length >= targetPos) return { node, offset: targetPos - offset };
+          offset += node.nodeValue.length;
+          lastNode = node;
+        }
+      }
+      if (lastNode === editor) return { node: editor, offset: 0 };
+      if (lastNode.nodeType === Node.TEXT_NODE) return { node: lastNode, offset: lastNode.nodeValue.length };
+      return { node: lastNode, offset: 0 };
+    }
+
+    function setCaret(pos) {
+      const { node, offset } = getNodeAt(pos);
+      if (node) {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        if (node === editor && editor.childNodes.length === 0) range.setStart(editor, 0);
+        else range.setStart(node, offset);
+        range.collapse(true);
+        sel.removeAllRanges(); sel.addRange(range);
+      }
+    }
+
+    // 🌟 7. DOM 手術刀
+    function applyInsert(pos, text) {
+      const parts = text.split('\n');
+      let currentPos = pos;
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i].length > 0) {
+          const { node, offset } = getNodeAt(currentPos);
+          const txtNode = document.createTextNode(parts[i]);
+          if (node === editor) editor.appendChild(txtNode);
+          else if (node.nodeType === Node.TEXT_NODE) {
+            const split = node.splitText(offset);
+            node.parentNode.insertBefore(txtNode, split);
+          } else if (node.nodeName === 'BR') {
+            node.parentNode.insertBefore(txtNode, node);
+          } else editor.appendChild(txtNode);
+          currentPos += parts[i].length;
+        }
+        if (i < parts.length - 1) { 
+          const { node, offset } = getNodeAt(currentPos);
+          const br = document.createElement('br');
+          if (node === editor) editor.appendChild(br);
+          else if (node.nodeType === Node.TEXT_NODE) {
+            const split = node.splitText(offset);
+            node.parentNode.insertBefore(br, split);
+          } else if (node.nodeName === 'BR') {
+            node.parentNode.insertBefore(br, node);
+          } else editor.appendChild(br);
+          currentPos += 1;
+        }
+      }
+    }
+
+    function applyDelete(pos, len) {
+      let remaining = len;
+      while (remaining > 0) {
+        const { node, offset } = getNodeAt(pos);
+        if (!node || node === editor) break;
+        if (node.nodeType === Node.TEXT_NODE) {
+          const available = node.nodeValue.length - offset;
+          const delCount = Math.min(available, remaining);
+          node.deleteData(offset, delCount);
+          remaining -= delCount;
+          if (node.nodeValue.length === 0) node.remove();
+        } else if (node.nodeName === 'BR') {
+          node.remove();
+          remaining -= 1;
+        } else break;
+      }
+    }
+
+    function updateRemoteComp(cid, pos, text) {
+      let span = document.getElementById('comp-' + cid);
+      if (!text || text.trim() === '') {
+        if (span) span.remove();
+        return;
+      }
+      if (!span) {
+        span = document.createElement('span');
+        span.id = 'comp-' + cid;
+        span.className = 'remote-comp';
+        const { node, offset } = getNodeAt(pos);
+        const range = document.createRange();
+        if (node === editor) {
+          editor.appendChild(span);
+        } else if (node.nodeType === Node.TEXT_NODE) {
+          range.setStart(node, offset);
+          range.insertNode(span);
+        } else if (node.tagName === 'BR') {
+          node.parentNode.insertBefore(span, node);
+        } else {
+          editor.appendChild(span);
+        }
+      }
+      span.textContent = text;
+    }
+
+    function renderSingleRemoteCursor(cid) {
+      const item = remoteCursors.get(cid);
+      if (!item || !editor) return;
+      const el = item.element;
+      const targetIndex = item.index;
+      
+      const cs = window.getComputedStyle(editor);
+      const fontHeight = parseFloat(cs.fontSize) || 48;
+      const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
+      
+      let targetX = parseFloat(cs.paddingLeft) || 8;
+      let targetY = parseFloat(cs.paddingTop) || 16;
+
+      const { node, offset } = getNodeAt(targetIndex);
+
+      if (node !== editor && targetIndex > 0) {
+        const range = document.createRange();
+        const edRect = editorContainer.getBoundingClientRect(); // 絕對綁定容器位置
+
+        if (offset > 0 && node.nodeType === Node.TEXT_NODE) {
+          range.setStart(node, offset - 1);
+          range.setEnd(node, offset);
+          const rect = range.getBoundingClientRect();
+          const charStr = node.nodeValue.charAt(offset - 1);
+          if (charStr === '\n') {
+            targetX = parseFloat(cs.paddingLeft) || 8;
+            targetY = (rect.bottom - edRect.top) + editorContainer.scrollTop;
+          } else {
+            targetX = rect.right - edRect.left;
+            targetY = (rect.top - edRect.top) + editorContainer.scrollTop;
+          }
+        } else if (node.nodeName === 'BR') {
+          range.setStartBefore(node);
+          range.collapse(true);
+          const rect = range.getBoundingClientRect();
+          targetX = rect.left - edRect.left;
+          targetY = (rect.top - edRect.top) + editorContainer.scrollTop;
+        } else {
+          range.setStart(node, offset);
+          range.collapse(true);
+          const rect = range.getBoundingClientRect();
+          targetX = rect.left - edRect.left;
+          targetY = (rect.top - edRect.top) + editorContainer.scrollTop;
+        }
+      }
+
+      el.style.left = targetX + 'px';
+      el.style.top = (targetY * scaleVal) + 'px';
+      el.style.height = fontHeight + 'px';
+      el.style.zoom = scaleVal;
+      el.style.display = 'block';
+    }
+
+    function redrawAllRemoteCursors() {
+      for (const cid of remoteCursors.keys()) renderSingleRemoteCursor(cid);
+    }
+
+    let isRenderScheduled = false;
     function scheduleUIRender() {
       if (!isRenderScheduled) {
         isRenderScheduled = true;
         requestAnimationFrame(() => {
-          try { renderAudienceView(); } catch(e) {}
+          try {
+            redrawAllRemoteCursors();
+          } catch(e) { console.error(e); }
           isRenderScheduled = false;
         });
       }
     }
 
-    function renderAudienceView() {
-      if (remoteComposingMap.size === 0) {
-        viewerContainer.textContent = baseCommittedText;
-        viewerContainer.scrollTop = viewerContainer.scrollHeight;
-        return;
-      }
-      const comps = Array.from(remoteComposingMap.values()).sort((a, b) => a.pos - b.pos);
-      viewerContainer.innerHTML = '';
-      let lastIdx = 0;
-      for (const c of comps) {
-        const p = Math.min(Math.max(c.pos, 0), baseCommittedText.length);
-        viewerContainer.appendChild(document.createTextNode(baseCommittedText.substring(lastIdx, p)));
-        const span = document.createElement('span');
-        span.className = 'remote-comp';
-        span.textContent = c.text;
-        viewerContainer.appendChild(span);
-        lastIdx = p;
-      }
-      viewerContainer.appendChild(document.createTextNode(baseCommittedText.substring(lastIdx)));
-      viewerContainer.scrollTop = viewerContainer.scrollHeight;
+    // --- OT 資料流同步 ---
+
+    function getAtomicOps(oldText, newText) {
+      if (oldText === newText) return [];
+      let prefix = 0, suffix = 0;
+      while (prefix < oldText.length && prefix < newText.length && oldText[prefix] === newText[prefix]) prefix++;
+      while (suffix < oldText.length - prefix && suffix < newText.length - prefix && oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]) suffix++;
+      const delLen = oldText.length - prefix - suffix;
+      const insText = newText.substring(prefix, newText.length - suffix);
+      const ops = [];
+      if (delLen > 0) ops.push({ type: 'delete', pos: prefix, len: delLen });
+      if (insText.length > 0) ops.push({ type: 'insert', pos: prefix, text: insText });
+      return ops;
     }
 
-    socket.on('connect', () => { viewerContainer.innerHTML = ''; socket.emit('join', { room: roomId, is_editor: false }); });
-
-    socket.on('init_document', data => {
-      baseCommittedText = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    function handleLocalTyping() {
+      const currentText = getCleanText();
+      if (currentText === localShadowText) return; 
+      const ops = getAtomicOps(localShadowText, currentText);
+      localShadowText = currentText;
+      
+      if (ops.length > 0) {
+        for (const op of ops) {
+          if (inFlightOp === null) {
+            inFlightOp = op;
+            socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, ops: [op] });
+          } else { bufferOps.push(op); }
+        }
+      }
+      wordCount.innerText = currentText.replace(/\s/g, '').length;
       scheduleUIRender();
-      if (data && data.settings) applySettings(data.settings);
+    }
+
+    socket.on('ack_operation', data => {
+      serverVersion = data.version;
+      inFlightOp = null;
+      if (bufferOps.length > 0) {
+        const opsToSend = bufferOps;
+        bufferOps = [];
+        inFlightOp = { type: 'batch', count: opsToSend.length };
+        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, ops: opsToSend });
+      }
     });
 
-    socket.on('sync_settings', data => { applySettings(data); });
-
-    function applySettings(settings) {
-      if (settings.theme === 'dark') { document.body.style.background = '#0a0a0a'; document.body.style.color = '#ffff33'; }
-      if (settings.theme === 'green') { document.body.style.background = '#c7edcc'; document.body.style.color = '#111827'; }
-      if (settings.theme === 'navy') { document.body.style.background = '#0b132b'; document.body.style.color = '#e0e1dd'; }
-      if (settings.theme === 'light') { document.body.style.background = '#f1f5f9'; document.body.style.color = '#0f172a'; }
-      const px = (settings.pad_x || 8) + 'px'; const py = (settings.pad_y || 16) + 'px';
-      viewerContainer.style.fontSize = (settings.size || 48) + 'px';
-      viewerContainer.style.padding = `${py} ${px} 60px ${px}`;
-      viewerContainer.style.zoom = (settings.scale || 100) / 100;
+    function transformOp(op1, op2, priority) {
+      if (!op1 || !op2) return op1;
+      const t1 = op1.type, p1 = op1.pos; const t2 = op2.type, p2 = op2.pos;
+      if (t1 === 'insert' && t2 === 'insert') return { type: 'insert', pos: (p1 < p2 || (p1 === p2 && priority === 'left')) ? p1 : p1 + op2.text.length, text: op1.text };
+      else if (t1 === 'insert' && t2 === 'delete') return { type: 'insert', pos: p1 <= p2 ? p1 : (p1 >= p2 + op2.len ? p1 - op2.len : p2), text: op1.text };
+      else if (t1 === 'delete' && t2 === 'insert') return { type: 'delete', pos: p1 + op1.len <= p2 ? p1 : (p1 >= p2 ? p1 + op2.text.length : p1), len: p1 + op1.len <= p2 || p1 >= p2 ? op1.len : op1.len + op2.text.length };
+      else if (t1 === 'delete' && t2 === 'delete') {
+        if (p1 + op1.len <= p2) return { type: 'delete', pos: p1, len: op1.len };
+        if (p1 >= p2 + op2.len) return { type: 'delete', pos: p1 - op2.len, len: op1.len };
+        const newLen = op1.len - (Math.min(p1 + op1.len, p2 + op2.len) - Math.max(p1, p2));
+        return newLen > 0 ? { type: 'delete', pos: Math.min(p1, p2), len: newLen } : null;
+      }
+      return op1;
     }
 
     socket.on('remote_operation', data => {
-      if (data.is_clear) { baseCommittedText = ''; remoteComposingMap.clear(); scheduleUIRender(); return; }
-      if (data.client_id) remoteComposingMap.delete(data.client_id);
-      const ops = data.ops || [];
-      for (let op of ops) {
-        if (op.type === 'insert') {
-          const p = Math.min(op.pos, baseCommittedText.length);
-          baseCommittedText = baseCommittedText.slice(0, p) + op.text + baseCommittedText.slice(p);
-        } else if (op.type === 'delete') {
-          const p = Math.min(op.pos, baseCommittedText.length);
-          const endP = Math.min(p + op.len, baseCommittedText.length);
-          baseCommittedText = baseCommittedText.slice(0, p) + baseCommittedText.slice(endP);
+      if (!data || data.client_id === myClientId) return;
+
+      if (data.is_clear) {
+        editor.innerHTML = ''; localShadowText = ''; serverVersion = data.version;
+        inFlightOp = null; bufferOps = []; wordCount.innerText = '0';
+        scheduleUIRender(); return;
+      }
+
+      updateRemoteComp(data.client_id, 0, ''); 
+      serverVersion = data.version;
+      const remoteOps = data.ops || [];
+
+      for (let rOp of remoteOps) {
+        let transformedRemote = rOp;
+        if (inFlightOp && inFlightOp.type !== 'batch') {
+          transformedRemote = transformOp(transformedRemote, inFlightOp, 'right');
+          inFlightOp = transformOp(inFlightOp, rOp, 'left');
         }
+        const newBuffer = [];
+        for (let bOp of bufferOps) {
+          if (transformedRemote) {
+            const nextBufferOp = transformOp(bOp, transformedRemote, 'left');
+            transformedRemote = transformOp(transformedRemote, bOp, 'right');
+            if (nextBufferOp) newBuffer.push(nextBufferOp);
+          } else { newBuffer.push(bOp); }
+        }
+        bufferOps = newBuffer;
+
+        if (transformedRemote) {
+          if (transformedRemote.type === 'insert') localShadowText = localShadowText.slice(0, transformedRemote.pos) + transformedRemote.text + localShadowText.slice(transformedRemote.pos);
+          else if (transformedRemote.type === 'delete') localShadowText = localShadowText.slice(0, transformedRemote.pos) + localShadowText.slice(transformedRemote.pos + transformedRemote.len);
+          
+          const caret = getCaret();
+          if (transformedRemote.type === 'insert') {
+            applyInsert(transformedRemote.pos, transformedRemote.text);
+            if (caret >= transformedRemote.pos) setCaret(caret + transformedRemote.text.length);
+          } else if (transformedRemote.type === 'delete') {
+            applyDelete(transformedRemote.pos, transformedRemote.len);
+            if (caret > transformedRemote.pos) setCaret(Math.max(transformedRemote.pos, caret - transformedRemote.len));
+          }
+        }
+      }
+      wordCount.innerText = localShadowText.replace(/\s/g, '').length;
+      scheduleUIRender();
+    });
+
+    // --- 即時注音流與打字捕捉 ---
+    function broadcastLiveTyping(str) {
+      clearTimeout(liveTypingTimer);
+      liveTypingTimer = setTimeout(() => {
+        socket.emit('live_composing_stream', { room: roomId, client_id: myClientId, cursor_index: getCaret(), composing_text: str });
+        broadcastCursorOnly();
+      }, 16);
+    }
+
+    socket.on('remote_composing_stream', data => {
+      if (!data || !data.client_id || data.client_id === myClientId) return;
+      updateRemoteComp(data.client_id, data.cursor_index, data.composing_text);
+      const renderPos = data.composing_text.length > 0 ? data.cursor_index + data.composing_text.length : data.cursor_index;
+      updateRemoteCursor(data.client_id, renderPos);
+      scheduleUIRender();
+    });
+
+    editor.addEventListener('compositionstart', () => { isComposing = true; broadcastLiveTyping('...'); });
+    editor.addEventListener('compositionupdate', (e) => { broadcastLiveTyping(e.data || ''); });
+    editor.addEventListener('compositionend', () => { isComposing = false; broadcastLiveTyping(''); handleLocalTyping(); broadcastCursorOnly(); });
+    editor.addEventListener('input', (e) => {
+      if (e.isComposing || isComposing) { if (e.data) broadcastLiveTyping(e.data); return; }
+      broadcastLiveTyping(''); handleLocalTyping(); broadcastCursorOnly();
+    });
+
+    function broadcastCursorOnly() {
+      const pos = getCaret();
+      if (pos !== lastSentCursor) {
+        lastSentCursor = pos;
+        socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: pos });
+      }
+    }
+    editor.addEventListener('click', broadcastCursorOnly);
+    editor.addEventListener('keyup', (e) => { if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)) broadcastCursorOnly(); });
+
+    socket.on('cursor_update', data => {
+      if (!data || !data.client_id || data.client_id === myClientId) return;
+      updateRemoteCursor(data.client_id, data.cursor_index);
+    });
+
+    socket.on('cursor_remove', data => {
+      if (data && data.client_id && remoteCursors.has(data.client_id)) {
+        const item = remoteCursors.get(data.client_id);
+        if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
+        updateRemoteComp(data.client_id, 0, '');
+        remoteCursors.delete(data.client_id);
+        scheduleUIRender();
+      }
+    });
+
+    function updateRemoteCursor(cid, cursorIndex) {
+      let item = remoteCursors.get(cid);
+      if (!item) {
+        const isMaster = (cid === currentMasterClientId);
+        const color = isMaster ? '#16a34a' : '#0284c7';
+        const el = document.createElement('div'); el.className = 'remote-cursor'; el.style.backgroundColor = color; el.style.boxShadow = `0 0 6px ${color}`;
+        const tag = document.createElement('div'); tag.className = 'remote-cursor-tag'; tag.style.backgroundColor = color; tag.innerText = isMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
+        el.appendChild(tag); remoteCursorsContainer.appendChild(el);
+        item = { index: cursorIndex, element: el, fadeTimer: null };
+        remoteCursors.set(cid, item);
+      } else { item.index = cursorIndex; }
+      item.element.style.opacity = '1';
+      clearTimeout(item.fadeTimer);
+      item.fadeTimer = setTimeout(() => { if (item.element) item.element.style.opacity = '0.35'; }, 5000);
+      scheduleUIRender();
+    }
+
+    // --- 連線初始化 ---
+    socket.on('connect', () => { editor.innerHTML = ''; socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); });
+    
+    socket.on('init_document', data => {
+      if (!data) return;
+      editor.innerHTML = '';
+      localShadowText = data.text || ''; serverVersion = data.version || 0;
+      applyInsert(0, localShadowText); 
+      updateWordCount(); scheduleUIRender();
+      if (data.settings && amIMaster) {
+        if (data.settings.theme) { document.body.setAttribute('data-theme', data.settings.theme); document.getElementById('themeSelect').value = data.settings.theme; }
+        if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
+        if (data.settings.scale) scaleInput.value = data.settings.scale;
+        if (data.settings.pad_x) padXInput.value = data.settings.pad_x;
+        if (data.settings.pad_y) document.getElementById('padYInput').value = data.settings.pad_y;
+        applyLocalStyle();
+      }
+    });
+
+    socket.on('role_status_update', data => {
+      const totalEditors = data.total_editors || 1;
+      document.getElementById('viewerCountText').innerText = data.total_viewers || 0;
+      amIMaster = (data.master_client_id === myClientId);
+      currentMasterClientId = data.master_client_id;
+
+      remoteCursors.forEach((item, cid) => {
+        if (!data.active_editors.includes(cid) || cid === myClientId) {
+          if (item.element) item.element.remove();
+          updateRemoteComp(cid, 0, ''); remoteCursors.delete(cid);
+        }
+      });
+
+      if (totalEditors <= 1) {
+        document.getElementById('onlineDot').style.background = '#eab308';
+        document.getElementById('onlineCountText').innerHTML = `👤 僅您在線`;
+      } else {
+        document.getElementById('onlineDot').style.background = '#22c55e';
+        document.getElementById('onlineCountText').innerHTML = `👥 協作在線：<strong style="color:#4ade80;">${totalEditors}</strong> 人`;
+      }
+
+      if (amIMaster) {
+          masterToggleBtn.className = "btn btn-master-role active";
+          masterToggleBtn.innerText = totalEditors <= 1 ? "🔒 主投影 (單人)" : "🔒 主投影 (主控中)";
+          modeHintText.innerText = "身分：【主投影控制台】";
+      } else {
+          masterToggleBtn.className = "btn btn-master-role inactive";
+          masterToggleBtn.innerText = "👑 點擊接管主投影";
+          modeHintText.innerText = "身分：【獨立協作視圖】";
       }
       scheduleUIRender();
     });
 
-    socket.on('remote_composing_stream', data => {
-      if (!data || !data.client_id) return;
-      if (data.composing_text && data.composing_text.length > 0) remoteComposingMap.set(data.client_id, { pos: data.cursor_index, text: data.composing_text });
-      else remoteComposingMap.delete(data.client_id);
+    // --- 工具列與 UI 功能 ---
+    window.addEventListener('resize', scheduleUIRender);
+    editorContainer.addEventListener('scroll', scheduleUIRender); // 綁定在外層確保游標捲動
+
+    function applyLocalStyle() {
+      const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
+      const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
+      editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
+      editor.style.padding = `${py} ${px} 10px ${px}`;
+      editor.style.zoom = scaleVal;
+      // 讓紅線跟隨 paddingX 縮放對齊
+      endLineMarker.style.marginLeft = px;
+      endLineMarker.style.marginRight = px;
       scheduleUIRender();
-    });
+    }
+
+    function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { room: roomId, client_id: myClientId, theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(padYInput.value, 10) }); }
+    function stepScale(delta) { scaleInput.value = Math.min(Math.max((parseInt(scaleInput.value, 10) || 100) + delta, 40), 250); applyAndSync(); }
+    function stepPadX(delta) { padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta); applyAndSync(); }
+    function stepPadY(delta) { padYInput.value = Math.max(0, (parseInt(padYInput.value, 10) || 0) + delta); applyAndSync(); }
+    function stepSize(delta) { const input = document.getElementById('fontSizeInput'); input.value = Math.min(Math.max((parseInt(input.value, 10) || 48) + delta, 12), 140); applyAndSync(); }
+    function updateWordCount() { if (editor) wordCount.innerText = getCleanText().replace(/\s/g, '').length; }
+    function changeTheme(themeName) { document.body.setAttribute('data-theme', themeName); }
+    function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
+    function toggleFullscreen() { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{}); else document.exitFullscreen(); }
+    function openAudienceView() { window.open(audienceUrl, '_blank', 'width=1000,height=700'); }
+    function copyLink() { navigator.clipboard.writeText(window.location.href); alert('已複製共筆連結'); }
+    function toggleExportMenu() { document.getElementById('exportMenu').classList.toggle('show-menu'); }
+    window.addEventListener('click', (e) => { if (!e.target.matches('.btn-export')) document.getElementById('exportMenu').classList.remove('show-menu'); });
+    function exportTxt() {
+      const text = getCleanText().trimEnd();
+      if (!text) { alert('目前無內容！'); return; }
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(["\uFEFF" + text], { type: 'text/plain;charset=utf-8' })); a.download = `頻道${roomId}_逐字稿.txt`; a.click();
+    }
+    
+    let qrcodeInstance = null;
+    function openQrModal() {
+      document.getElementById('qrModal').classList.add('active'); document.getElementById('modalQrUrl').innerText = audienceUrl;
+      if (!qrcodeInstance) qrcodeInstance = new QRCode(document.getElementById('modalQrBox'), { text: audienceUrl, width: 180, height: 180, colorDark : "#0f172a", colorLight : "#ffffff", correctLevel : QRCode.CorrectLevel.M });
+    }
+    function closeQrModal(e) { document.getElementById('qrModal').classList.remove('active'); }
+    function copyAudienceLink() { navigator.clipboard.writeText(audienceUrl); alert('已複製觀眾連結！'); }
+
+    // --- AI 語音辨識模組 ---
+    let currentRecInstance = null;
+    let isAIRunning = false;
+    let audioContext = null;
+    let mediaStream = null;
+    let animFrameId = null;
+    let spawnTimer = null;
+    let sessionCommittedText = '';
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    async function startAudioMeter() {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const src = audioContext.createMediaStreamSource(mediaStream);
+        const gainNode = audioContext.createGain(); gainNode.gain.value = 2.2;
+        const analyser = audioContext.createAnalyser(); analyser.fftSize = 256;
+        src.connect(gainNode); gainNode.connect(analyser);
+
+        const buf = new Uint8Array(analyser.frequencyBinCount);
+        function checkVolume() {
+          if (!isAIRunning) return;
+          analyser.getByteFrequencyData(buf);
+          let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i];
+          let p = Math.min(Math.round(((sum / buf.length) / 110) * 100), 100);
+          vuFill.style.width = p + '%';
+          animFrameId = requestAnimationFrame(checkVolume);
+        }
+        checkVolume();
+      } catch(e) {}
+    }
+
+    function stopAudioMeter() {
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+      if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+      if (audioContext && audioContext.state !== 'closed') audioContext.close();
+      vuFill.style.width = '0%';
+    }
+
+    function spawnAndStartEngine() {
+      if (!isAIRunning) return;
+      if (!SpeechRecognition) { alert('請使用 Chrome/Edge 瀏覽器！'); return; }
+      if (currentRecInstance) { try { currentRecInstance.onend = null; currentRecInstance.abort(); } catch(e) {} currentRecInstance = null; }
+
+      const rec = new SpeechRecognition();
+      rec.continuous = true; rec.interimResults = true; rec.lang = 'zh-TW'; rec.maxAlternatives = 1;
+
+      rec.onstart = () => { aiStatusTitle.innerText = 'AI 辨識中：'; aiIndicator.style.background = '#22c55e'; sessionCommittedText = ''; };
+
+      rec.onresult = (event) => {
+        let fullCurrentStream = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) fullCurrentStream += event.results[i][0].transcript;
+        fullCurrentStream = fullCurrentStream.trim();
+        if (!fullCurrentStream) return;
+
+        let delta = '';
+        if (fullCurrentStream.startsWith(sessionCommittedText)) delta = fullCurrentStream.slice(sessionCommittedText.length);
+        else {
+          let commonLen = 0;
+          while (commonLen < sessionCommittedText.length && commonLen < fullCurrentStream.length && sessionCommittedText[commonLen] === fullCurrentStream[commonLen]) commonLen++;
+          delta = fullCurrentStream.slice(commonLen);
+        }
+        
+        if (delta) {
+          const caret = getCaret();
+          applyInsert(caret, delta);
+          setCaret(caret + delta.length);
+          handleLocalTyping();
+          sessionCommittedText = fullCurrentStream;
+        }
+        aiInterimText.innerText = fullCurrentStream;
+        if (event.results[event.resultIndex].isFinal) sessionCommittedText = '';
+      };
+
+      rec.onerror = (e) => { if (e.error === 'not-allowed') { alert('麥克風被拒絕！'); stopAISpeech(); } };
+      rec.onend = () => { if (isAIRunning) { aiIndicator.style.background = '#eab308'; sessionCommittedText = ''; clearTimeout(spawnTimer); spawnTimer = setTimeout(spawnAndStartEngine, 30); } };
+      try { rec.start(); currentRecInstance = rec; } catch(err) { clearTimeout(spawnTimer); spawnTimer = setTimeout(spawnAndStartEngine, 60); }
+    }
+
+    async function toggleAISpeech() {
+      if (!isAIRunning) {
+        isAIRunning = true; await startAudioMeter();
+        aiToggleBtn.classList.add('recording'); aiToggleBtn.innerText = '⏹️ 停止語音';
+        aiStreamBar.classList.add('active'); aiInterimText.innerText = '請說話...';
+        spawnAndStartEngine();
+      } else { stopAISpeech(); }
+    }
+
+    function stopAISpeech() {
+      isAIRunning = false; stopAudioMeter(); clearTimeout(spawnTimer);
+      if (currentRecInstance) { try { currentRecInstance.onend = null; currentRecInstance.abort(); } catch(e) {} currentRecInstance = null; }
+      aiToggleBtn.classList.remove('recording'); aiToggleBtn.innerText = '🎙️ 語音辨識';
+      aiStreamBar.classList.remove('active'); sessionCommittedText = '';
+    }
+
+    applyLocalStyle();
   </script>
 </body>
 </html>
