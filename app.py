@@ -32,6 +32,7 @@ def cancel_room_cleanup(room_id):
     if timer:
         timer.cancel()
 
+# 核心 OT 演算法：處理文字位置衝突
 def transform_primitive(op1, op2, priority):
     if not op1 or not op2:
         return op1
@@ -115,7 +116,7 @@ def handle_join(data):
 
     if room_id not in rooms:
         rooms[room_id] = {
-            "text": "", "version": 0, "history": [],
+            "text": "\n", "version": 0, "history": [],
             "settings": {"theme": "dark", "size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
             "master_client_id": None, "editors": {}, "viewers": set()
         }
@@ -149,21 +150,15 @@ def handle_client_operation(data):
     raw_ops = data.get('ops', [])
 
     if data.get('is_clear'):
-        rdata["text"] = ""
+        rdata["text"] = "\n"
         rdata["version"] += 1
         rdata["history"].append({'version': rdata["version"], 'op': {'type': 'clear'}})
-        emit('remote_operation', {'version': rdata["version"], 'is_clear': True, 'full_text': '', 'client_id': client_id}, to=room_id, include_self=False)
+        emit('remote_operation', {'version': rdata["version"], 'is_clear': True, 'client_id': client_id}, to=room_id, include_self=False)
         emit('ack_operation', {'version': rdata["version"]}, to=sid)
         return
 
-    ops = []
-    for op in raw_ops:
-        if op.get('type') == 'insert':
-            op['text'] = op['text'].replace('\r\n', '\n').replace('\r', '\n')
-        ops.append(op)
-
     transformed_ops = []
-    for op in ops:
+    for op in raw_ops:
         curr = dict(op)
         for hist in rdata["history"]:
             if hist['version'] > base_version:
@@ -182,25 +177,13 @@ def handle_client_operation(data):
     if transformed_ops:
         emit('remote_operation', {
             'version': rdata["version"], 'ops': transformed_ops,
-            'full_text': rdata["text"], 'client_id': client_id
+            'client_id': client_id
         }, to=room_id, include_self=False)
-
-@socketio.on('live_composing_stream')
-def handle_live_composing_stream(data):
-    room_id = data.get('room')
-    client_id = data.get('client_id')
-    if not client_id or not room_id or room_id not in rooms: return
-    emit('remote_composing_stream', {
-        'client_id': client_id, 'cursor_index': data.get('cursor_index', 0),
-        'composing_text': data.get('composing_text', '')
-    }, to=room_id, include_self=False)
 
 @socketio.on('cursor_move')
 def handle_cursor_move(data):
     room_id = data.get('room')
-    client_id = data.get('client_id')
-    if not client_id or not room_id or room_id not in rooms: return
-    emit('cursor_update', {'client_id': client_id, 'cursor_index': data.get('cursor_index', 0)}, to=room_id, include_self=False)
+    emit('cursor_update', data, to=room_id, include_self=False)
 
 @socketio.on('update_settings')
 def handle_update_settings(data):
