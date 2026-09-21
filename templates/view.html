@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <title>觀眾大螢幕 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+  <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+  <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -12,64 +14,38 @@
       height: 100vh; display: flex; flex-direction: column; overflow: hidden;
       transition: background 0.2s ease, color 0.2s ease;
     }
-    #viewerContainer {
-      flex: 1; padding: 16px 8px 60px 8px; font-size: 48px; line-height: 1.25;
-      white-space: pre-wrap; word-break: break-all; overflow-y: auto; text-align: justify;
+    #viewerContainer { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; }
+    .ql-container.ql-snow { border: none; font-family: inherit; height: auto; overflow: visible; }
+    .ql-editor {
+      min-height: 50px; padding: 16px 8px 60px 8px; 
+      font-size: 48px; line-height: 1.25; color: inherit !important;
+      white-space: pre-wrap; word-break: break-all; text-align: justify; overflow-y: visible;
     }
-    .remote-comp {
-      color: inherit; border-bottom: 1px dashed rgba(255, 255, 255, 0.4); opacity: 0.85;
-    }
+    
+    #remoteCursorsContainer { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 50; }
+    .remote-cursor { position: absolute; width: 3px; pointer-events: none; transition: all 0.1s ease; }
+    .remote-cursor-bubble { position: absolute; top: 100%; left: -2px; margin-top: 4px; background: rgba(0,0,0,0.8); color: #fff; font-size: 14px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: none; }
   </style>
 </head>
 <body>
-  <div id="viewerContainer">等待聽打員連線...</div>
+  <div id="viewerContainer">
+    <div id="editor"></div>
+    <div id="remoteCursorsContainer"></div>
+  </div>
 
   <script>
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity });
     const roomId = "{{ room_id }}";
-    const viewerContainer = document.getElementById('viewerContainer');
     
-    let baseCommittedText = "";
-    const remoteComposingMap = new Map();
-    let isRenderScheduled = false;
+    const quill = new Quill('#editor', { theme: 'snow', modules: { toolbar: false }, readOnly: true });
+    const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
+    const remoteCursors = new Map();
+    const qlEditor = document.querySelector('.ql-editor');
 
-    function scheduleUIRender() {
-      if (!isRenderScheduled) {
-        isRenderScheduled = true;
-        requestAnimationFrame(() => {
-          try { renderAudienceView(); } catch(e) {}
-          isRenderScheduled = false;
-        });
-      }
-    }
-
-    function renderAudienceView() {
-      if (remoteComposingMap.size === 0) {
-        viewerContainer.textContent = baseCommittedText;
-        viewerContainer.scrollTop = viewerContainer.scrollHeight;
-        return;
-      }
-      const comps = Array.from(remoteComposingMap.values()).sort((a, b) => a.pos - b.pos);
-      viewerContainer.innerHTML = '';
-      let lastIdx = 0;
-      for (const c of comps) {
-        const p = Math.min(Math.max(c.pos, 0), baseCommittedText.length);
-        viewerContainer.appendChild(document.createTextNode(baseCommittedText.substring(lastIdx, p)));
-        const span = document.createElement('span');
-        span.className = 'remote-comp';
-        span.textContent = c.text;
-        viewerContainer.appendChild(span);
-        lastIdx = p;
-      }
-      viewerContainer.appendChild(document.createTextNode(baseCommittedText.substring(lastIdx)));
-      viewerContainer.scrollTop = viewerContainer.scrollHeight;
-    }
-
-    socket.on('connect', () => { viewerContainer.innerHTML = ''; socket.emit('join', { room: roomId, is_editor: false }); });
+    socket.on('connect', () => { quill.setText(''); socket.emit('join', { room: roomId, is_editor: false }); });
 
     socket.on('init_document', data => {
-      baseCommittedText = (data.text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-      scheduleUIRender();
+      if (data && data.text) quill.setText(data.text);
       if (data && data.settings) applySettings(data.settings);
     });
 
@@ -81,34 +57,57 @@
       if (settings.theme === 'navy') { document.body.style.background = '#0b132b'; document.body.style.color = '#e0e1dd'; }
       if (settings.theme === 'light') { document.body.style.background = '#f1f5f9'; document.body.style.color = '#0f172a'; }
       const px = (settings.pad_x || 8) + 'px'; const py = (settings.pad_y || 16) + 'px';
-      viewerContainer.style.fontSize = (settings.size || 48) + 'px';
-      viewerContainer.style.padding = `${py} ${px} 60px ${px}`;
-      viewerContainer.style.zoom = (settings.scale || 100) / 100;
+      qlEditor.style.fontSize = (settings.size || 48) + 'px';
+      qlEditor.style.padding = `${py} ${px} 60px ${px}`;
+      qlEditor.style.zoom = (settings.scale || 100) / 100;
     }
 
     socket.on('remote_operation', data => {
-      if (data.is_clear) { baseCommittedText = ''; remoteComposingMap.clear(); scheduleUIRender(); return; }
-      if (data.client_id) remoteComposingMap.delete(data.client_id);
+      if (data.is_clear) { quill.setText(''); return; }
       const ops = data.ops || [];
       for (let op of ops) {
-        if (op.type === 'insert') {
-          const p = Math.min(op.pos, baseCommittedText.length);
-          baseCommittedText = baseCommittedText.slice(0, p) + op.text + baseCommittedText.slice(p);
-        } else if (op.type === 'delete') {
-          const p = Math.min(op.pos, baseCommittedText.length);
-          const endP = Math.min(p + op.len, baseCommittedText.length);
-          baseCommittedText = baseCommittedText.slice(0, p) + baseCommittedText.slice(endP);
-        }
+        if (op.type === 'insert') quill.insertText(op.pos, op.text, 'api');
+        else if (op.type === 'delete') quill.deleteText(op.pos, op.len, 'api');
       }
-      scheduleUIRender();
     });
 
     socket.on('remote_composing_stream', data => {
       if (!data || !data.client_id) return;
-      if (data.composing_text && data.composing_text.length > 0) remoteComposingMap.set(data.client_id, { pos: data.cursor_index, text: data.composing_text });
-      else remoteComposingMap.delete(data.client_id);
-      scheduleUIRender();
+      updateRemoteCursor(data.client_id, data.cursor_index, data.composing_text);
     });
+
+    socket.on('cursor_update', data => {
+      if (!data || !data.client_id) return;
+      updateRemoteCursor(data.client_id, data.cursor_index, '');
+    });
+
+    function updateRemoteCursor(cid, cursorIndex, composingText = '') {
+      let item = remoteCursors.get(cid);
+      if (!item) {
+        const el = document.createElement('div'); el.className = 'remote-cursor'; el.style.backgroundColor = '#16a34a'; el.style.boxShadow = `0 0 6px #16a34a`;
+        const bubble = document.createElement('div'); bubble.className = 'remote-cursor-bubble';
+        el.appendChild(bubble);
+        remoteCursorsContainer.appendChild(el);
+        item = { element: el, bubble: bubble, fadeTimer: null };
+        remoteCursors.set(cid, item);
+      }
+      
+      const bounds = quill.getBounds(cursorIndex);
+      if (bounds) {
+        item.element.style.left = bounds.left + 'px';
+        item.element.style.top = bounds.top + 'px';
+        item.element.style.height = bounds.height + 'px';
+        if (composingText) {
+          item.bubble.innerText = "正在輸入: " + composingText;
+          item.bubble.style.display = 'block';
+        } else {
+          item.bubble.style.display = 'none';
+        }
+        item.element.style.opacity = '1';
+        clearTimeout(item.fadeTimer);
+        item.fadeTimer = setTimeout(() => { if (item.element) item.element.style.opacity = '0'; }, 5000);
+      }
+    }
   </script>
 </body>
 </html>
