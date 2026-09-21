@@ -3,11 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <title>聽打工作台 - 頻道 {{ room_id }}</title>
+  
+  <!-- 導入現代核心套件 -->
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <!-- 導入現代企業級富文本引擎 Quill.js -->
   <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
   <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/quill-cursors@3.1.0/dist/quill-cursors.min.js"></script>
+
   <style>
     * { box-sizing: border-box; }
     body[data-theme="dark"] { --bg-main: #0a0a0a; --bg-editor: #121212; --text-color: #ffff33; --caret-color: #ffff33; }
@@ -16,6 +19,8 @@
     body[data-theme="light"] { --bg-main: #f1f5f9; --bg-editor: #ffffff; --text-color: #0f172a; --caret-color: #0f172a; }
 
     body { margin: 0; display: flex; flex-direction: column; height: 100vh; background: var(--bg-main); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; overflow: hidden; transition: background 0.2s ease, color 0.2s ease; }
+    
+    /* 工具列樣式 */
     .toolbar { display: flex; gap: 8px; padding: 8px 16px; background: #1e1e1e; border-bottom: 1px solid #333; align-items: center; flex-wrap: wrap; z-index: 100; transition: transform 0.25s ease; }
     #topHoverTrigger { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 12px; z-index: 150; }
     body.toolbar-hidden #topHoverTrigger { display: block; }
@@ -33,6 +38,7 @@
     .btn-export { background: #d97706; border: none; color: #fff; } .btn-export:hover { background: #b45309; }
     .btn-danger { background: #dc2626; border: none; color: #fff; } .btn-danger:hover { background: #b91c1c; }
     .btn-dark { background: #334155; border: none; color: #fff; } .btn-dark:hover { background: #475569; }
+    
     .btn-master-role { font-weight: bold; transition: all 0.2s; }
     .btn-master-role.active { background: #15803d; color: #f0fdf4; border: 1px solid #22c55e; cursor: default; }
     .btn-master-role.inactive { background: #3f3f46; color: #fde047; border: 1px solid #71717a; }
@@ -46,35 +52,33 @@
     .vu-meter-bar { width: 50px; height: 9px; background: #18181b; border-radius: 4px; overflow: hidden; border: 1px solid #52525b; }
     #vuFill { width: 0%; height: 100%; background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%); transition: width 0.04s ease-out; }
 
+    /* 🌟 全新 Quill 容器佈局 */
     .editor-wrapper { flex: 1; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
     
-    /* 外層容器產生捲軸，讓游標點擊空白處可引導至編輯器 */
+    /* 外層產生捲軸，點擊下方空白引導至編輯器 */
     .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; cursor: text; }
 
-    /* 覆蓋 Quill 預設樣式，套用聽打專用格式 */
-    .ql-container.ql-snow { border: none; font-family: inherit; height: auto; overflow: visible; }
+    /* 覆蓋 Quill 原生樣式，打造極簡純淨編輯區 */
+    .ql-toolbar { display: none !important; } /* 徹底隱藏 Quill 原生工具列 */
+    .ql-container.ql-snow { border: none !important; font-family: inherit; font-size: inherit; height: auto; }
     .ql-editor {
-      min-height: 50px; padding: 16px 8px 0px 8px; /* 底部為 0，讓紅線緊貼 */
+      padding: 16px 8px 0px 8px; /* 底部 0，讓紅線完美貼合最後一行 */
+      min-height: auto; overflow-y: visible;
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
-      font-size: 48px; line-height: 1.25; letter-spacing: 0px; color: var(--text-color) !important;
+      font-size: 48px; line-height: 1.25; color: var(--text-color) !important;
       caret-color: var(--caret-color); white-space: pre-wrap; word-break: break-all;
-      text-align: justify; overflow-y: visible;
+      text-align: justify;
     }
 
-    /* 🌟 原生排版紅線：免運算，靜靜待在編輯器正下方，保留 60px 喘息空間 */
+    /* 🌟 回歸最單純的原生 HTML 紅線排版 */
     #endLineMarker {
       display: flex; align-items: center; justify-content: flex-end;
-      height: 22px; margin: 0 8px 60px 8px;
+      height: 22px; margin: 0 8px 60px 8px; /* 底部保留 60px 喘息空間 */
       border-top: 1px dashed rgba(239, 68, 68, 0.7); pointer-events: none; user-select: none; opacity: 0.9;
     }
     #endLineMarker span { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #ef4444; font-size: 11px; font-family: monospace; font-weight: bold; padding: 1px 6px; border-radius: 3px; margin-top: -24px; letter-spacing: 1px; }
 
-    /* 🌟 遠端游標與 Google Docs 同款浮動氣泡 */
-    #remoteCursorsContainer { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 50; }
-    .remote-cursor { position: absolute; width: 3px; pointer-events: none; transition: all 0.1s ease; }
-    .remote-cursor-tag { position: absolute; top: -24px; left: -2px; color: #fff; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); }
-    .remote-cursor-bubble { position: absolute; top: 100%; left: -2px; margin-top: 4px; background: rgba(0,0,0,0.8); color: #fff; font-size: 14px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: none; }
-
+    /* 狀態列與彈出視窗 */
     .statusbar { padding: 6px 16px; background: #1e1e1e; border-top: 1px solid #333; font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; z-index: 100; flex-wrap: wrap; gap: 8px; }
     .status-left-box { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     .save-alert-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; background: rgba(217, 119, 6, 0.2); border: 1px solid #d97706; border-radius: 12px; color: #fde68a; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
@@ -182,12 +186,10 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <!-- Quill.js 的核心渲染容器 -->
+      <!-- 🌟 這是真正的企業級編輯核心 -->
       <div id="editor"></div>
-      <!-- 原生紅線自然跟隨在下方 -->
+      <!-- 🌟 原生排版跟隨，徹底刪除所有 JS 計算 -->
       <div id="endLineMarker"><span>--- END ---</span></div>
-      <!-- 絕對定位的游標圖層 -->
-      <div id="remoteCursorsContainer"></div>
     </div>
     
     <button class="btn" id="exitFsBtn" onclick="toggleFullscreen()">✕ 退出全螢幕 (ESC)</button>
@@ -224,7 +226,7 @@
   </div>
 
   <script>
-    // 🌟 1. 全域變數鎖定
+    // 🌟 全域基礎變數
     const roomId = "{{ room_id }}";
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
@@ -236,15 +238,19 @@
 
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     
-    // 🌟 2. 啟動 Quill.js 企業級引擎
+    // 🌟 啟動 Quill.js 與官方游標外掛 (徹底取代手寫的破舊機制)
+    Quill.register('modules/cursors', QuillCursors);
     const quill = new Quill('#editor', {
       theme: 'snow',
-      modules: { toolbar: false },
-      formats: [] // 關閉所有特殊格式，確保純文字
+      modules: {
+        toolbar: false,
+        cursors: { transformOnTextChange: true, hideDelayMs: 5000, hideSpeedMs: 0 }
+      },
+      formats: [] // 鎖死純文字模式
     });
-
+    const cursors = quill.getModule('cursors');
+    
     const editorContainer = document.getElementById('editorContainer');
-    const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
     const endLineMarker = document.getElementById('endLineMarker');
     const wordCount = document.getElementById('wordCount');
     const scaleInput = document.getElementById('scaleInput');
@@ -254,30 +260,16 @@
     const modeHintText = document.getElementById('modeHintText');
     const qlEditor = document.querySelector('.ql-editor');
     
-    const aiToggleBtn = document.getElementById('aiToggleBtn');
-    const aiStreamBar = document.getElementById('aiStreamBar');
-    const aiStatusTitle = document.getElementById('aiStatusTitle');
-    const aiInterimText = document.getElementById('aiInterimText');
-    const aiIndicator = document.getElementById('aiIndicator');
-    const vuFill = document.getElementById('vuFill');
-
     let amIMaster = true;
     let currentMasterClientId = null;
-    let isComposing = false;
     let serverVersion = 0;
-    
     let localShadowText = "";
     
-    // 🌟 3. 嚴格單行道隊列 (保證同步0當機)
+    // 🌟 單行道嚴格隊列，杜絕一切斷線死機可能
     let bufferOps = []; 
     let inFlightOp = null; 
-    let pendingRemoteOps = []; // 輸入法保護鎖暫存區
-    
-    const remoteCursors = new Map();
-    let liveTypingTimer = null;
-    let lastSentCursor = -1;
 
-    // 點擊空白處自動聚焦 Quill
+    // 🌟 防呆：點擊下方空白區域，游標自動彈回最後一個字
     editorContainer.addEventListener('click', (e) => {
         if (e.target === editorContainer || e.target === endLineMarker) {
             quill.focus();
@@ -292,28 +284,23 @@
       }
     }
 
-    // 🌟 4. 輸入法完美保護鎖機制
-    quill.root.addEventListener('compositionstart', () => { isComposing = true; });
-    quill.root.addEventListener('compositionend', () => { 
-      isComposing = false; 
-      // 注音結束後，瞬間將對方剛才打的字補上畫布，體驗無縫
-      while(pendingRemoteOps.length > 0) {
-        applyOpToQuill(pendingRemoteOps.shift());
-      }
-    });
-
-    // 🌟 5. 結合 Quill 取代 DOM 的神級字串比對算法
-    function getAtomicOps(oldText, newText) {
-      if (oldText === newText) return [];
-      let prefix = 0, suffix = 0;
-      while (prefix < oldText.length && prefix < newText.length && oldText[prefix] === newText[prefix]) prefix++;
-      while (suffix < oldText.length - prefix && suffix < newText.length - prefix && oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]) suffix++;
-      const delLen = oldText.length - prefix - suffix;
-      const insText = newText.substring(prefix, newText.length - suffix);
-      const ops = [];
-      if (delLen > 0) ops.push({ type: 'delete', pos: prefix, len: delLen });
-      if (insText.length > 0) ops.push({ type: 'insert', pos: prefix, text: insText });
-      return ops;
+    // 🌟 核心引擎：將 Quill Delta 完美轉換為伺服器看得懂的 OT 格式
+    function deltaToOps(delta) {
+        let pos = 0;
+        let ops = [];
+        delta.ops.forEach(op => {
+            if (op.retain) {
+                pos += op.retain;
+            } else if (op.insert) {
+                if (typeof op.insert === 'string') {
+                    ops.push({ type: 'insert', pos: pos, text: op.insert });
+                    pos += op.insert.length;
+                }
+            } else if (op.delete) {
+                ops.push({ type: 'delete', pos: pos, len: op.delete });
+            }
+        });
+        return ops;
     }
 
     function sendNextOp() {
@@ -323,26 +310,26 @@
       }
     }
 
-    // 攔截 Quill 變更並計算送出
+    // 當地端打字時，攔截修改並丟入防護隊列
     quill.on('text-change', (delta, oldDelta, source) => {
-      if (source !== 'user') return; // 過濾掉伺服器傳來的變更
-      const currentText = quill.getText();
-      if (currentText === localShadowText) return; 
+      if (source !== 'user') return; // 只處理本人打的字，忽略伺服器同步過來的字
       
-      const ops = getAtomicOps(localShadowText, currentText);
-      localShadowText = currentText;
+      const ops = deltaToOps(delta);
+      for (const op of ops) bufferOps.push(op);
       
-      if (ops.length > 0) {
-        for (const op of ops) bufferOps.push(op);
-        sendNextOp();
-      }
-      wordCount.innerText = currentText.replace(/\s/g, '').length;
-      broadcastCursorOnly();
+      localShadowText = quill.getText();
+      wordCount.innerText = localShadowText.replace(/\s/g, '').length;
+      sendNextOp();
+    });
+
+    // 游標移動廣播
+    quill.on('selection-change', (range, oldRange, source) => {
+      if (range) socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: range.index, cursor_length: range.length });
     });
 
     socket.on('ack_operation', data => {
       serverVersion = data.version;
-      inFlightOp = null; // 解鎖，確保順序
+      inFlightOp = null; // 伺服器已確認，解鎖發送下一筆
       sendNextOp();
     });
 
@@ -361,23 +348,12 @@
       return op1;
     }
 
-    // 🌟 外科手術更新畫面
-    function applyOpToQuill(op) {
-      if (op.type === 'insert') {
-        localShadowText = localShadowText.slice(0, op.pos) + op.text + localShadowText.slice(op.pos);
-        quill.insertText(op.pos, op.text, 'api');
-      } else if (op.type === 'delete') {
-        localShadowText = localShadowText.slice(0, op.pos) + localShadowText.slice(op.pos + op.len);
-        quill.deleteText(op.pos, op.len, 'api');
-      }
-    }
-
     socket.on('remote_operation', data => {
       if (!data || data.client_id === myClientId) return;
 
       if (data.is_clear) {
-        quill.setText(''); localShadowText = quill.getText(); serverVersion = data.version;
-        inFlightOp = null; bufferOps = []; pendingRemoteOps = []; wordCount.innerText = '0';
+        quill.setText('\n'); localShadowText = '\n'; serverVersion = data.version;
+        inFlightOp = null; bufferOps = []; wordCount.innerText = '0';
         return;
       }
 
@@ -401,102 +377,43 @@
         bufferOps = newBuffer;
 
         if (transformedRemote) {
-          // 若本地正在注音選字，先暫存操作，保證注音絕不閃爍跳行
-          if (isComposing) {
-            pendingRemoteOps.push(transformedRemote);
-          } else {
-            applyOpToQuill(transformedRemote);
+          if (transformedRemote.type === 'insert') {
+            localShadowText = localShadowText.slice(0, transformedRemote.pos) + transformedRemote.text + localShadowText.slice(transformedRemote.pos);
+            // 🌟 透過 'api' 寫入，Quill 底層自動避開注音區塊，絕不干擾閃爍
+            quill.insertText(transformedRemote.pos, transformedRemote.text, 'api'); 
+          } else if (transformedRemote.type === 'delete') {
+            localShadowText = localShadowText.slice(0, transformedRemote.pos) + localShadowText.slice(transformedRemote.pos + transformedRemote.len);
+            quill.deleteText(transformedRemote.pos, transformedRemote.len, 'api');
           }
         }
       }
       wordCount.innerText = localShadowText.replace(/\s/g, '').length;
     });
 
-    // 🌟 6. Google Docs 同款浮動氣泡 (完全不干擾排版，只顯示在游標上方)
-    function broadcastLiveTyping(str) {
-      clearTimeout(liveTypingTimer);
-      liveTypingTimer = setTimeout(() => {
-        const range = quill.getSelection();
-        const pos = range ? range.index : 0;
-        socket.emit('live_composing_stream', { room: roomId, client_id: myClientId, cursor_index: pos, composing_text: str });
-      }, 16);
-    }
-
-    quill.root.addEventListener('compositionupdate', (e) => { broadcastLiveTyping(e.data || '...'); });
-
-    function broadcastCursorOnly() {
-      const range = quill.getSelection();
-      const pos = range ? range.index : 0;
-      if (pos !== lastSentCursor) {
-        lastSentCursor = pos;
-        socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: pos });
-      }
-    }
-    quill.on('selection-change', broadcastCursorOnly);
-
-    socket.on('remote_composing_stream', data => {
-      if (!data || !data.client_id || data.client_id === myClientId) return;
-      updateRemoteCursor(data.client_id, data.cursor_index, data.composing_text);
-    });
-
+    // 🌟 原生 Google Docs 彩色游標渲染
     socket.on('cursor_update', data => {
-      if (!data || !data.client_id || data.client_id === myClientId) return;
-      updateRemoteCursor(data.client_id, data.cursor_index, '');
+      if (!data || data.client_id === myClientId) return;
+      const isMaster = (data.client_id === currentMasterClientId);
+      const color = isMaster ? '#16a34a' : '#0284c7';
+      const name = isMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
+      
+      cursors.createCursor(data.client_id, name, color);
+      cursors.moveCursor(data.client_id, { index: data.cursor_index, length: data.cursor_length || 0 });
     });
 
     socket.on('cursor_remove', data => {
-      if (data && data.client_id && remoteCursors.has(data.client_id)) {
-        const item = remoteCursors.get(data.client_id);
-        if (item.element) item.element.remove();
-        remoteCursors.delete(data.client_id);
-      }
+      if (data && data.client_id) cursors.removeCursor(data.client_id);
     });
 
-    // Quill 原生座標計算，精準無延遲
-    function updateRemoteCursor(cid, cursorIndex, composingText = '') {
-      let item = remoteCursors.get(cid);
-      if (!item) {
-        const isMaster = (cid === currentMasterClientId);
-        const color = isMaster ? '#16a34a' : '#0284c7';
-        const el = document.createElement('div'); el.className = 'remote-cursor'; el.style.backgroundColor = color; el.style.boxShadow = `0 0 6px ${color}`;
-        const tag = document.createElement('div'); tag.className = 'remote-cursor-tag'; tag.style.backgroundColor = color; tag.innerText = isMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
-        const bubble = document.createElement('div'); bubble.className = 'remote-cursor-bubble';
-        el.appendChild(tag); el.appendChild(bubble);
-        remoteCursorsContainer.appendChild(el);
-        item = { element: el, bubble: bubble, fadeTimer: null };
-        remoteCursors.set(cid, item);
-      }
-      
-      const bounds = quill.getBounds(cursorIndex);
-      if (bounds) {
-        const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
-        item.element.style.left = bounds.left + 'px';
-        item.element.style.top = bounds.top + 'px';
-        item.element.style.height = bounds.height + 'px';
-        item.element.style.zoom = scaleVal;
-        
-        if (composingText) {
-          item.bubble.innerText = "正在輸入: " + composingText;
-          item.bubble.style.display = 'block';
-        } else {
-          item.bubble.style.display = 'none';
-        }
-        item.element.style.opacity = '1';
-        clearTimeout(item.fadeTimer);
-        item.fadeTimer = setTimeout(() => { if (item.element) item.element.style.opacity = '0.35'; }, 5000);
-      }
-    }
-
-    // --- 連線初始化與斷線防護 ---
+    // --- 連線與斷線狀態保護 ---
     socket.on('connect', () => { 
-      quill.setText(''); 
-      inFlightOp = null; bufferOps = []; pendingRemoteOps = [];
+      inFlightOp = null; bufferOps = []; // 重連必定清空隊列防當機
       socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); 
     });
     
     socket.on('init_document', data => {
       if (!data) return;
-      quill.setText(data.text ? data.text : '');
+      quill.setText(data.text ? data.text : '\n');
       localShadowText = quill.getText(); serverVersion = data.version || 0;
       updateWordCount();
       if (data.settings && amIMaster) {
@@ -514,13 +431,6 @@
       document.getElementById('viewerCountText').innerText = data.total_viewers || 0;
       amIMaster = (data.master_client_id === myClientId);
       currentMasterClientId = data.master_client_id;
-
-      remoteCursors.forEach((item, cid) => {
-        if (!data.active_editors.includes(cid) || cid === myClientId) {
-          if (item.element) item.element.remove();
-          remoteCursors.delete(cid);
-        }
-      });
 
       if (totalEditors <= 1) {
         document.getElementById('onlineDot').style.background = '#eab308';
@@ -541,12 +451,12 @@
       }
     });
 
-    // --- 工具列與 UI 功能 ---
+    // --- 工具列與 UI ---
     function applyLocalStyle() {
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       qlEditor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      qlEditor.style.padding = `${py} ${px} 0px ${px}`; // 底部為0，讓原生紅線完美貼齊
+      qlEditor.style.padding = `${py} ${px} 0px ${px}`; // 底部設為 0 以貼合原生紅線
       qlEditor.style.zoom = scaleVal;
       endLineMarker.style.marginLeft = px;
       endLineMarker.style.marginRight = px;
@@ -566,6 +476,8 @@
     function copyLink() { navigator.clipboard.writeText(window.location.href); alert('已複製共筆連結'); }
     function toggleExportMenu() { document.getElementById('exportMenu').classList.toggle('show-menu'); }
     window.addEventListener('click', (e) => { if (!e.target.matches('.btn-export')) document.getElementById('exportMenu').classList.remove('show-menu'); });
+    
+    // 完美匯出純文字檔
     function exportTxt() {
       const text = quill.getText().trimEnd();
       if (!text) { alert('目前無內容！'); return; }
@@ -580,7 +492,7 @@
     function closeQrModal(e) { document.getElementById('qrModal').classList.remove('active'); }
     function copyAudienceLink() { navigator.clipboard.writeText(audienceUrl); alert('已複製觀眾連結！'); }
 
-    // --- AI 語音辨識模組 (適配 Quill) ---
+    // --- AI 語音辨識直接匯入 Quill ---
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
