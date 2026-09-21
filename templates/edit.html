@@ -5,6 +5,9 @@
   <title>聽打工作台 - 頻道 {{ room_id }}</title>
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- 導入現代企業級富文本引擎 Quill.js -->
+  <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
+  <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body[data-theme="dark"] { --bg-main: #0a0a0a; --bg-editor: #121212; --text-color: #ffff33; --caret-color: #ffff33; }
@@ -44,16 +47,21 @@
     #vuFill { width: 0%; height: 100%; background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%); transition: width 0.04s ease-out; }
 
     .editor-wrapper { flex: 1; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
+    
+    /* 外層容器產生捲軸，讓游標點擊空白處可引導至編輯器 */
     .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; cursor: text; }
 
-    #editor {
-      padding: 16px 8px 0px 8px;
+    /* 覆蓋 Quill 預設樣式，套用聽打專用格式 */
+    .ql-container.ql-snow { border: none; font-family: inherit; height: auto; overflow: visible; }
+    .ql-editor {
+      min-height: 50px; padding: 16px 8px 0px 8px; /* 底部為 0，讓紅線緊貼 */
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
       font-size: 48px; line-height: 1.25; letter-spacing: 0px; color: var(--text-color) !important;
       caret-color: var(--caret-color); white-space: pre-wrap; word-break: break-all;
-      text-align: justify; outline: none; position: relative; z-index: 10;
+      text-align: justify; overflow-y: visible;
     }
 
+    /* 🌟 原生排版紅線：免運算，靜靜待在編輯器正下方，保留 60px 喘息空間 */
     #endLineMarker {
       display: flex; align-items: center; justify-content: flex-end;
       height: 22px; margin: 0 8px 60px 8px;
@@ -61,9 +69,11 @@
     }
     #endLineMarker span { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #ef4444; font-size: 11px; font-family: monospace; font-weight: bold; padding: 1px 6px; border-radius: 3px; margin-top: -24px; letter-spacing: 1px; }
 
-    .remote-comp { color: inherit; border-bottom: 1px dashed #71717a; pointer-events: none; }
-    .remote-cursor { position: absolute; width: 3px; pointer-events: none; z-index: 50; display: none; transition: opacity 0.3s ease; }
-    .remote-cursor-tag { position: absolute; top: -24px; left: -2px; color: #fff; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); z-index: 60; }
+    /* 🌟 遠端游標與 Google Docs 同款浮動氣泡 */
+    #remoteCursorsContainer { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 50; }
+    .remote-cursor { position: absolute; width: 3px; pointer-events: none; transition: all 0.1s ease; }
+    .remote-cursor-tag { position: absolute; top: -24px; left: -2px; color: #fff; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 3px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.6); }
+    .remote-cursor-bubble { position: absolute; top: 100%; left: -2px; margin-top: 4px; background: rgba(0,0,0,0.8); color: #fff; font-size: 14px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: none; }
 
     .statusbar { padding: 6px 16px; background: #1e1e1e; border-top: 1px solid #333; font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; z-index: 100; flex-wrap: wrap; gap: 8px; }
     .status-left-box { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -172,8 +182,11 @@
     </div>
 
     <div class="editor-container" id="editorContainer">
-      <div id="editor" contenteditable="true" spellcheck="false"></div>
+      <!-- Quill.js 的核心渲染容器 -->
+      <div id="editor"></div>
+      <!-- 原生紅線自然跟隨在下方 -->
       <div id="endLineMarker"><span>--- END ---</span></div>
+      <!-- 絕對定位的游標圖層 -->
       <div id="remoteCursorsContainer"></div>
     </div>
     
@@ -211,6 +224,7 @@
   </div>
 
   <script>
+    // 🌟 1. 全域變數鎖定
     const roomId = "{{ room_id }}";
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
@@ -222,7 +236,13 @@
 
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     
-    const editor = document.getElementById('editor');
+    // 🌟 2. 啟動 Quill.js 企業級引擎
+    const quill = new Quill('#editor', {
+      theme: 'snow',
+      modules: { toolbar: false },
+      formats: [] // 關閉所有特殊格式，確保純文字
+    });
+
     const editorContainer = document.getElementById('editorContainer');
     const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
     const endLineMarker = document.getElementById('endLineMarker');
@@ -232,6 +252,7 @@
     const padYInput = document.getElementById('padYInput');
     const masterToggleBtn = document.getElementById('masterToggleBtn');
     const modeHintText = document.getElementById('modeHintText');
+    const qlEditor = document.querySelector('.ql-editor');
     
     const aiToggleBtn = document.getElementById('aiToggleBtn');
     const aiStreamBar = document.getElementById('aiStreamBar');
@@ -243,28 +264,24 @@
     let amIMaster = true;
     let currentMasterClientId = null;
     let isComposing = false;
-    let composingBasePos = 0; // 🌟 新增：鎖定注音偏移的鐵錨，徹底消滅跳行
     let serverVersion = 0;
     
     let localShadowText = "";
     
-    // 🌟 嚴格單行道隊列 (保證絕不斷線)
+    // 🌟 3. 嚴格單行道隊列 (保證同步0當機)
     let bufferOps = []; 
     let inFlightOp = null; 
+    let pendingRemoteOps = []; // 輸入法保護鎖暫存區
     
     const remoteCursors = new Map();
     let liveTypingTimer = null;
     let lastSentCursor = -1;
 
+    // 點擊空白處自動聚焦 Quill
     editorContainer.addEventListener('click', (e) => {
         if (e.target === editorContainer || e.target === endLineMarker) {
-            editor.focus();
-            const sel = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(editor);
-            range.collapse(false);
-            sel.removeAllRanges();
-            sel.addRange(range);
+            quill.focus();
+            quill.setSelection(quill.getLength(), 0);
         }
     });
 
@@ -275,320 +292,17 @@
       }
     }
 
-    editor.addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
-        if (e.isComposing || isComposing) return;
-        e.preventDefault();
-        insertPureNewline();
+    // 🌟 4. 輸入法完美保護鎖機制
+    quill.root.addEventListener('compositionstart', () => { isComposing = true; });
+    quill.root.addEventListener('compositionend', () => { 
+      isComposing = false; 
+      // 注音結束後，瞬間將對方剛才打的字補上畫布，體驗無縫
+      while(pendingRemoteOps.length > 0) {
+        applyOpToQuill(pendingRemoteOps.shift());
       }
     });
 
-    editor.addEventListener('paste', e => {
-      e.preventDefault();
-      const text = (e.clipboardData || window.clipboardData).getData('text/plain');
-      applyInsert(getCaret(), text.replace(/\r\n/g, '\n').replace(/\r/g, '\n'));
-      setCaret(getCaret() + text.length);
-      handleLocalTyping();
-      broadcastCursorOnly();
-    });
-
-    function insertPureNewline() {
-      const sel = window.getSelection();
-      if (!sel.rangeCount) return;
-      const range = sel.getRangeAt(0);
-      range.deleteContents();
-      const br = document.createElement('br');
-      range.insertNode(br);
-      range.setStartAfter(br);
-      range.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(range);
-      handleLocalTyping();
-      broadcastCursorOnly();
-    }
-
-    function getCleanText() {
-      let text = '';
-      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
-      let node;
-      while ((node = walker.nextNode())) {
-        let skip = false;
-        let p = node.parentNode;
-        while (p && p !== editor) {
-          if (p.classList && (p.classList.contains('remote-comp') || p.classList.contains('remote-cursor'))) { skip = true; break; }
-          p = p.parentNode;
-        }
-        if (node.nodeType === Node.ELEMENT_NODE && node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) skip = true;
-        
-        if (!skip) {
-           if (node.nodeType === Node.TEXT_NODE) text += node.nodeValue;
-           else if (node.nodeName === 'BR') text += '\n';
-        }
-      }
-      return text;
-    }
-
-    // 🌟 全新重寫的手工游標解析器，保證不會受到任何干擾
-    function getCaret() {
-      const sel = window.getSelection();
-      if (!sel.rangeCount) return lastSentCursor > -1 ? lastSentCursor : 0;
-      
-      let targetNode = sel.anchorNode;
-      let targetOffset = sel.anchorOffset;
-      if (!editor.contains(targetNode) && targetNode !== editor) return lastSentCursor > -1 ? lastSentCursor : 0;
-      
-      let textLen = 0;
-      let found = false;
-
-      function traverse(node) {
-        if (found) return;
-        if (node.nodeType === Node.ELEMENT_NODE && node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) return;
-
-        if (node === targetNode) {
-          if (node.nodeType === Node.TEXT_NODE) {
-            textLen += targetOffset;
-          } else {
-            for (let i = 0; i < targetOffset; i++) {
-              if (node.childNodes[i]) countNode(node.childNodes[i]);
-            }
-          }
-          found = true;
-          return;
-        }
-
-        if (node.nodeType === Node.TEXT_NODE) {
-          textLen += node.nodeValue.length;
-        } else if (node.nodeName === 'BR') {
-          textLen += 1;
-        } else {
-          for (let i = 0; i < node.childNodes.length; i++) {
-            traverse(node.childNodes[i]);
-            if (found) return;
-          }
-        }
-      }
-
-      function countNode(n) {
-         if (n.nodeType === Node.ELEMENT_NODE && n.classList && (n.classList.contains('remote-comp') || n.classList.contains('remote-cursor'))) return;
-         if (n.nodeType === Node.TEXT_NODE) textLen += n.nodeValue.length;
-         else if (n.nodeName === 'BR') textLen += 1;
-         else {
-             for(let i=0; i<n.childNodes.length; i++) countNode(n.childNodes[i]);
-         }
-      }
-
-      if (targetNode === editor) {
-          for (let i=0; i < targetOffset; i++) if (editor.childNodes[i]) countNode(editor.childNodes[i]);
-          return textLen;
-      }
-
-      for (let i = 0; i < editor.childNodes.length; i++) {
-        traverse(editor.childNodes[i]);
-        if (found) break;
-      }
-      return textLen;
-    }
-
-    // 🌟 精確計算邊界 (isAfter 屬性完美防護換行錯位)
-    function getNodeAt(targetPos) {
-      let offset = 0;
-      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_ALL, null, false);
-      let node;
-      let lastNode = editor;
-      while ((node = walker.nextNode())) {
-        let skip = false;
-        let p = node.parentNode;
-        while (p && p !== editor) {
-          if (p.classList && (p.classList.contains('remote-comp') || p.classList.contains('remote-cursor'))) { skip = true; break; }
-          p = p.parentNode;
-        }
-        if (node.nodeType === Node.ELEMENT_NODE && node.classList && (node.classList.contains('remote-comp') || node.classList.contains('remote-cursor'))) skip = true;
-        if (skip) continue;
-
-        if (node.nodeName === 'BR') {
-          if (offset === targetPos) return { node, offset: 0, isAfter: false };
-          offset += 1;
-          lastNode = node;
-          if (offset === targetPos) return { node: lastNode, offset: 0, isAfter: true };
-        } else if (node.nodeType === Node.TEXT_NODE) {
-          if (offset + node.nodeValue.length >= targetPos) return { node, offset: targetPos - offset, isAfter: false };
-          offset += node.nodeValue.length;
-          lastNode = node;
-        }
-      }
-      if (lastNode === editor) return { node: editor, offset: 0, isAfter: true };
-      if (lastNode.nodeType === Node.TEXT_NODE) return { node: lastNode, offset: lastNode.nodeValue.length, isAfter: false };
-      return { node: lastNode, offset: 0, isAfter: true };
-    }
-
-    function setCaret(pos) {
-      const { node, offset } = getNodeAt(pos);
-      if (node) {
-        const sel = window.getSelection();
-        const range = document.createRange();
-        if (node === editor && editor.childNodes.length === 0) range.setStart(editor, 0);
-        else range.setStart(node, offset);
-        range.collapse(true);
-        sel.removeAllRanges(); sel.addRange(range);
-      }
-    }
-
-    function applyInsert(pos, text) {
-      const parts = text.split('\n');
-      let currentPos = pos;
-      for (let i = 0; i < parts.length; i++) {
-        if (parts[i].length > 0) {
-          const { node, offset, isAfter } = getNodeAt(currentPos);
-          const txtNode = document.createTextNode(parts[i]);
-          if (node === editor) editor.appendChild(txtNode);
-          else if (node.nodeType === Node.TEXT_NODE) {
-            const split = node.splitText(offset);
-            node.parentNode.insertBefore(txtNode, split);
-          } else if (node.nodeName === 'BR') {
-            if (isAfter) {
-                if (node.nextSibling) node.parentNode.insertBefore(txtNode, node.nextSibling);
-                else node.parentNode.appendChild(txtNode);
-            } else node.parentNode.insertBefore(txtNode, node);
-          } else editor.appendChild(txtNode);
-          currentPos += parts[i].length;
-        }
-        if (i < parts.length - 1) { 
-          const { node, offset, isAfter } = getNodeAt(currentPos);
-          const br = document.createElement('br');
-          if (node === editor) editor.appendChild(br);
-          else if (node.nodeType === Node.TEXT_NODE) {
-            const split = node.splitText(offset);
-            node.parentNode.insertBefore(br, split);
-          } else if (node.nodeName === 'BR') {
-            if (isAfter) {
-                if (node.nextSibling) node.parentNode.insertBefore(br, node.nextSibling);
-                else node.parentNode.appendChild(br);
-            } else node.parentNode.insertBefore(br, node);
-          } else editor.appendChild(br);
-          currentPos += 1;
-        }
-      }
-    }
-
-    function applyDelete(pos, len) {
-      let remaining = len;
-      while (remaining > 0) {
-        const { node, offset, isAfter } = getNodeAt(pos);
-        if (!node || node === editor) break;
-        if (node.nodeType === Node.TEXT_NODE) {
-          const available = node.nodeValue.length - offset;
-          const delCount = Math.min(available, remaining);
-          node.deleteData(offset, delCount);
-          remaining -= delCount;
-          if (node.nodeValue.length === 0) node.remove();
-        } else if (node.nodeName === 'BR') {
-          if (!isAfter) { node.remove(); remaining -= 1; }
-          else break;
-        } else break;
-      }
-    }
-
-    function updateRemoteComp(cid, pos, text) {
-      let span = document.getElementById('comp-' + cid);
-      if (!text || text.trim() === '') {
-        if (span) span.remove();
-        return;
-      }
-      if (!span) {
-        span = document.createElement('span');
-        span.id = 'comp-' + cid;
-        span.className = 'remote-comp';
-        const { node, offset, isAfter } = getNodeAt(pos);
-        if (node === editor) {
-          editor.appendChild(span);
-        } else if (node.nodeType === Node.TEXT_NODE) {
-          const range = document.createRange();
-          range.setStart(node, offset);
-          range.insertNode(span);
-        } else if (node.nodeName === 'BR') {
-          if (isAfter) {
-             if (node.nextSibling) node.parentNode.insertBefore(span, node.nextSibling);
-             else node.parentNode.appendChild(span);
-          } else node.parentNode.insertBefore(span, node);
-        } else {
-          editor.appendChild(span);
-        }
-      }
-      span.textContent = text;
-    }
-
-    function renderSingleRemoteCursor(cid) {
-      const item = remoteCursors.get(cid);
-      if (!item || !editor) return;
-      const el = item.element;
-      const targetIndex = item.index;
-      
-      const cs = window.getComputedStyle(editor);
-      const fontHeight = parseFloat(cs.fontSize) || 48;
-      const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
-      
-      let targetX = parseFloat(cs.paddingLeft) || 8;
-      let targetY = parseFloat(cs.paddingTop) || 16;
-
-      const { node, offset, isAfter } = getNodeAt(targetIndex);
-
-      if (node !== editor && targetIndex > 0) {
-        const range = document.createRange();
-        const edRect = editorContainer.getBoundingClientRect(); 
-
-        if (node.nodeType === Node.TEXT_NODE) {
-          if (offset > 0) {
-            range.setStart(node, offset - 1);
-            range.setEnd(node, offset);
-            const rect = range.getBoundingClientRect();
-            const charStr = node.nodeValue.charAt(offset - 1);
-            if (charStr === '\n') {
-              targetX = parseFloat(cs.paddingLeft) || 8;
-              targetY = (rect.bottom - edRect.top) + editorContainer.scrollTop;
-            } else {
-              targetX = rect.right - edRect.left;
-              targetY = (rect.top - edRect.top) + editorContainer.scrollTop;
-            }
-          } else {
-            range.setStart(node, 0);
-            range.collapse(true);
-            const rect = range.getBoundingClientRect();
-            targetX = rect.left - edRect.left;
-            targetY = (rect.top - edRect.top) + editorContainer.scrollTop;
-          }
-        } else if (node.nodeName === 'BR') {
-          if (isAfter) range.setStartAfter(node);
-          else range.setStartBefore(node);
-          range.collapse(true);
-          const rect = range.getBoundingClientRect();
-          targetX = rect.left - edRect.left;
-          targetY = (rect.top - edRect.top) + editorContainer.scrollTop;
-        }
-      }
-
-      el.style.left = targetX + 'px';
-      el.style.top = (targetY * scaleVal) + 'px';
-      el.style.height = fontHeight + 'px';
-      el.style.zoom = scaleVal;
-      el.style.display = 'block';
-    }
-
-    function redrawAllRemoteCursors() {
-      for (const cid of remoteCursors.keys()) renderSingleRemoteCursor(cid);
-    }
-
-    let isRenderScheduled = false;
-    function scheduleUIRender() {
-      if (!isRenderScheduled) {
-        isRenderScheduled = true;
-        requestAnimationFrame(() => {
-          try { redrawAllRemoteCursors(); } catch(e) {}
-          isRenderScheduled = false;
-        });
-      }
-    }
-
-    // 🌟 嚴格隊列，每次確保前一筆已被接收，從物理上根絕越界當機
+    // 🌟 5. 結合 Quill 取代 DOM 的神級字串比對算法
     function getAtomicOps(oldText, newText) {
       if (oldText === newText) return [];
       let prefix = 0, suffix = 0;
@@ -609,9 +323,12 @@
       }
     }
 
-    function handleLocalTyping() {
-      const currentText = getCleanText();
+    // 攔截 Quill 變更並計算送出
+    quill.on('text-change', (delta, oldDelta, source) => {
+      if (source !== 'user') return; // 過濾掉伺服器傳來的變更
+      const currentText = quill.getText();
       if (currentText === localShadowText) return; 
+      
       const ops = getAtomicOps(localShadowText, currentText);
       localShadowText = currentText;
       
@@ -620,12 +337,12 @@
         sendNextOp();
       }
       wordCount.innerText = currentText.replace(/\s/g, '').length;
-      scheduleUIRender();
-    }
+      broadcastCursorOnly();
+    });
 
     socket.on('ack_operation', data => {
       serverVersion = data.version;
-      inFlightOp = null; // 解除鎖定，允許下一筆發送
+      inFlightOp = null; // 解鎖，確保順序
       sendNextOp();
     });
 
@@ -644,16 +361,26 @@
       return op1;
     }
 
+    // 🌟 外科手術更新畫面
+    function applyOpToQuill(op) {
+      if (op.type === 'insert') {
+        localShadowText = localShadowText.slice(0, op.pos) + op.text + localShadowText.slice(op.pos);
+        quill.insertText(op.pos, op.text, 'api');
+      } else if (op.type === 'delete') {
+        localShadowText = localShadowText.slice(0, op.pos) + localShadowText.slice(op.pos + op.len);
+        quill.deleteText(op.pos, op.len, 'api');
+      }
+    }
+
     socket.on('remote_operation', data => {
       if (!data || data.client_id === myClientId) return;
 
       if (data.is_clear) {
-        editor.innerHTML = ''; localShadowText = ''; serverVersion = data.version;
-        inFlightOp = null; bufferOps = []; wordCount.innerText = '0';
-        scheduleUIRender(); return;
+        quill.setText(''); localShadowText = quill.getText(); serverVersion = data.version;
+        inFlightOp = null; bufferOps = []; pendingRemoteOps = []; wordCount.innerText = '0';
+        return;
       }
 
-      updateRemoteComp(data.client_id, 0, ''); 
       serverVersion = data.version;
       const remoteOps = data.ops || [];
 
@@ -674,122 +401,104 @@
         bufferOps = newBuffer;
 
         if (transformedRemote) {
-          if (transformedRemote.type === 'insert') localShadowText = localShadowText.slice(0, transformedRemote.pos) + transformedRemote.text + localShadowText.slice(transformedRemote.pos);
-          else if (transformedRemote.type === 'delete') localShadowText = localShadowText.slice(0, transformedRemote.pos) + localShadowText.slice(transformedRemote.pos + transformedRemote.len);
-          
-          const caret = getCaret();
-          if (transformedRemote.type === 'insert') {
-            applyInsert(transformedRemote.pos, transformedRemote.text);
-            if (caret >= transformedRemote.pos) setCaret(caret + transformedRemote.text.length);
-            // 動態補償錨點
-            if (isComposing && composingBasePos >= transformedRemote.pos) composingBasePos += transformedRemote.text.length;
-          } else if (transformedRemote.type === 'delete') {
-            applyDelete(transformedRemote.pos, transformedRemote.len);
-            if (caret > transformedRemote.pos) setCaret(Math.max(transformedRemote.pos, caret - transformedRemote.len));
-            // 動態補償錨點
-            if (isComposing && composingBasePos > transformedRemote.pos) {
-                composingBasePos -= Math.min(composingBasePos - transformedRemote.pos, transformedRemote.len);
-            }
+          // 若本地正在注音選字，先暫存操作，保證注音絕不閃爍跳行
+          if (isComposing) {
+            pendingRemoteOps.push(transformedRemote);
+          } else {
+            applyOpToQuill(transformedRemote);
           }
         }
       }
       wordCount.innerText = localShadowText.replace(/\s/g, '').length;
-      scheduleUIRender();
     });
 
-    // 🌟 即時注音防跳行動力學 (鎖定起始點，徹底消滅跳行)
+    // 🌟 6. Google Docs 同款浮動氣泡 (完全不干擾排版，只顯示在游標上方)
     function broadcastLiveTyping(str) {
       clearTimeout(liveTypingTimer);
       liveTypingTimer = setTimeout(() => {
-        // 如果正在打注音，永遠使用凍結的基準點傳送，不會因為文字變長而誤判換行！
-        const pos = isComposing ? composingBasePos : getCaret();
+        const range = quill.getSelection();
+        const pos = range ? range.index : 0;
         socket.emit('live_composing_stream', { room: roomId, client_id: myClientId, cursor_index: pos, composing_text: str });
-        if (!isComposing) broadcastCursorOnly();
       }, 16);
     }
 
-    socket.on('remote_composing_stream', data => {
-      if (!data || !data.client_id || data.client_id === myClientId) return;
-      updateRemoteComp(data.client_id, data.cursor_index, data.composing_text);
-      const renderPos = data.composing_text.length > 0 ? data.cursor_index + data.composing_text.length : data.cursor_index;
-      updateRemoteCursor(data.client_id, renderPos);
-    });
-
-    editor.addEventListener('compositionstart', () => { 
-      isComposing = true; 
-      composingBasePos = getCaret(); // 🌟 瞬間凍結錨點！
-      broadcastLiveTyping('...'); 
-    });
-    editor.addEventListener('compositionupdate', (e) => { broadcastLiveTyping(e.data || ''); });
-    editor.addEventListener('compositionend', () => { 
-      isComposing = false; 
-      broadcastLiveTyping(''); 
-      handleLocalTyping(); 
-      broadcastCursorOnly(); 
-    });
-    editor.addEventListener('input', (e) => {
-      if (e.isComposing || isComposing) { if (e.data) broadcastLiveTyping(e.data); return; }
-      broadcastLiveTyping(''); 
-      handleLocalTyping(); 
-      broadcastCursorOnly();
-    });
+    quill.root.addEventListener('compositionupdate', (e) => { broadcastLiveTyping(e.data || '...'); });
 
     function broadcastCursorOnly() {
-      const pos = getCaret();
+      const range = quill.getSelection();
+      const pos = range ? range.index : 0;
       if (pos !== lastSentCursor) {
         lastSentCursor = pos;
         socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: pos });
       }
     }
-    editor.addEventListener('click', broadcastCursorOnly);
-    editor.addEventListener('keyup', (e) => { if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End'].includes(e.key)) broadcastCursorOnly(); });
+    quill.on('selection-change', broadcastCursorOnly);
+
+    socket.on('remote_composing_stream', data => {
+      if (!data || !data.client_id || data.client_id === myClientId) return;
+      updateRemoteCursor(data.client_id, data.cursor_index, data.composing_text);
+    });
 
     socket.on('cursor_update', data => {
       if (!data || !data.client_id || data.client_id === myClientId) return;
-      updateRemoteCursor(data.client_id, data.cursor_index);
+      updateRemoteCursor(data.client_id, data.cursor_index, '');
     });
 
     socket.on('cursor_remove', data => {
       if (data && data.client_id && remoteCursors.has(data.client_id)) {
         const item = remoteCursors.get(data.client_id);
-        if (item.element && item.element.parentNode) item.element.parentNode.removeChild(item.element);
-        updateRemoteComp(data.client_id, 0, '');
+        if (item.element) item.element.remove();
         remoteCursors.delete(data.client_id);
-        scheduleUIRender();
       }
     });
 
-    function updateRemoteCursor(cid, cursorIndex) {
+    // Quill 原生座標計算，精準無延遲
+    function updateRemoteCursor(cid, cursorIndex, composingText = '') {
       let item = remoteCursors.get(cid);
       if (!item) {
         const isMaster = (cid === currentMasterClientId);
         const color = isMaster ? '#16a34a' : '#0284c7';
         const el = document.createElement('div'); el.className = 'remote-cursor'; el.style.backgroundColor = color; el.style.boxShadow = `0 0 6px ${color}`;
         const tag = document.createElement('div'); tag.className = 'remote-cursor-tag'; tag.style.backgroundColor = color; tag.innerText = isMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
-        el.appendChild(tag); remoteCursorsContainer.appendChild(el);
-        item = { index: cursorIndex, element: el, fadeTimer: null };
+        const bubble = document.createElement('div'); bubble.className = 'remote-cursor-bubble';
+        el.appendChild(tag); el.appendChild(bubble);
+        remoteCursorsContainer.appendChild(el);
+        item = { element: el, bubble: bubble, fadeTimer: null };
         remoteCursors.set(cid, item);
-      } else { item.index = cursorIndex; }
-      item.element.style.opacity = '1';
-      clearTimeout(item.fadeTimer);
-      item.fadeTimer = setTimeout(() => { if (item.element) item.element.style.opacity = '0.35'; }, 5000);
-      scheduleUIRender();
+      }
+      
+      const bounds = quill.getBounds(cursorIndex);
+      if (bounds) {
+        const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
+        item.element.style.left = bounds.left + 'px';
+        item.element.style.top = bounds.top + 'px';
+        item.element.style.height = bounds.height + 'px';
+        item.element.style.zoom = scaleVal;
+        
+        if (composingText) {
+          item.bubble.innerText = "正在輸入: " + composingText;
+          item.bubble.style.display = 'block';
+        } else {
+          item.bubble.style.display = 'none';
+        }
+        item.element.style.opacity = '1';
+        clearTimeout(item.fadeTimer);
+        item.fadeTimer = setTimeout(() => { if (item.element) item.element.style.opacity = '0.35'; }, 5000);
+      }
     }
 
     // --- 連線初始化與斷線防護 ---
     socket.on('connect', () => { 
-      editor.innerHTML = ''; 
-      inFlightOp = null; // 重連時保證解鎖隊列
-      bufferOps = [];
+      quill.setText(''); 
+      inFlightOp = null; bufferOps = []; pendingRemoteOps = [];
       socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); 
     });
     
     socket.on('init_document', data => {
       if (!data) return;
-      editor.innerHTML = '';
-      localShadowText = data.text || ''; serverVersion = data.version || 0;
-      applyInsert(0, localShadowText); 
-      updateWordCount(); scheduleUIRender();
+      quill.setText(data.text ? data.text : '');
+      localShadowText = quill.getText(); serverVersion = data.version || 0;
+      updateWordCount();
       if (data.settings && amIMaster) {
         if (data.settings.theme) { document.body.setAttribute('data-theme', data.settings.theme); document.getElementById('themeSelect').value = data.settings.theme; }
         if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
@@ -809,7 +518,7 @@
       remoteCursors.forEach((item, cid) => {
         if (!data.active_editors.includes(cid) || cid === myClientId) {
           if (item.element) item.element.remove();
-          updateRemoteComp(cid, 0, ''); remoteCursors.delete(cid);
+          remoteCursors.delete(cid);
         }
       });
 
@@ -830,23 +539,17 @@
           masterToggleBtn.innerText = "👑 點擊接管主投影";
           modeHintText.innerText = "身分：【獨立協作視圖】";
       }
-      scheduleUIRender();
     });
 
     // --- 工具列與 UI 功能 ---
-    window.addEventListener('resize', scheduleUIRender);
-    editorContainer.addEventListener('scroll', scheduleUIRender); 
-
     function applyLocalStyle() {
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
-      editor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      editor.style.padding = `${py} ${px} 0px ${px}`; // 底部為0，讓紅線完全緊貼文字
-      editor.style.zoom = scaleVal;
-      
+      qlEditor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
+      qlEditor.style.padding = `${py} ${px} 0px ${px}`; // 底部為0，讓原生紅線完美貼齊
+      qlEditor.style.zoom = scaleVal;
       endLineMarker.style.marginLeft = px;
       endLineMarker.style.marginRight = px;
-      scheduleUIRender();
     }
 
     function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { room: roomId, client_id: myClientId, theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(padYInput.value, 10) }); }
@@ -854,7 +557,7 @@
     function stepPadX(delta) { padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta); applyAndSync(); }
     function stepPadY(delta) { padYInput.value = Math.max(0, (parseInt(padYInput.value, 10) || 0) + delta); applyAndSync(); }
     function stepSize(delta) { const input = document.getElementById('fontSizeInput'); input.value = Math.min(Math.max((parseInt(input.value, 10) || 48) + delta, 12), 140); applyAndSync(); }
-    function updateWordCount() { if (editor) wordCount.innerText = getCleanText().replace(/\s/g, '').length; }
+    function updateWordCount() { wordCount.innerText = quill.getText().replace(/\s/g, '').length; }
     function changeTheme(themeName) { document.body.setAttribute('data-theme', themeName); }
     function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
     function toggleFullscreen() { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{}); else document.exitFullscreen(); }
@@ -864,7 +567,7 @@
     function toggleExportMenu() { document.getElementById('exportMenu').classList.toggle('show-menu'); }
     window.addEventListener('click', (e) => { if (!e.target.matches('.btn-export')) document.getElementById('exportMenu').classList.remove('show-menu'); });
     function exportTxt() {
-      const text = getCleanText().trimEnd();
+      const text = quill.getText().trimEnd();
       if (!text) { alert('目前無內容！'); return; }
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(["\uFEFF" + text], { type: 'text/plain;charset=utf-8' })); a.download = `頻道${roomId}_逐字稿.txt`; a.click();
     }
@@ -877,7 +580,7 @@
     function closeQrModal(e) { document.getElementById('qrModal').classList.remove('active'); }
     function copyAudienceLink() { navigator.clipboard.writeText(audienceUrl); alert('已複製觀眾連結！'); }
 
-    // --- AI 語音辨識模組 ---
+    // --- AI 語音辨識模組 (適配 Quill) ---
     let currentRecInstance = null;
     let isAIRunning = false;
     let audioContext = null;
@@ -942,10 +645,9 @@
         }
         
         if (delta) {
-          const caret = getCaret();
-          applyInsert(caret, delta);
-          setCaret(caret + delta.length);
-          handleLocalTyping();
+          const range = quill.getSelection();
+          const pos = range ? range.index : quill.getLength();
+          quill.insertText(pos, delta, 'user');
           sessionCommittedText = fullCurrentStream;
         }
         aiInterimText.innerText = fullCurrentStream;
