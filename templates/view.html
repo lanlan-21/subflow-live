@@ -6,6 +6,7 @@
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
   <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/quill-cursors@3.1.0/dist/quill-cursors.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -15,32 +16,38 @@
       transition: background 0.2s ease, color 0.2s ease;
     }
     #viewerContainer { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; }
-    .ql-container.ql-snow { border: none; font-family: inherit; height: auto; overflow: visible; }
+    
+    /* 覆蓋 Quill 預設，呈現無干擾的極簡大螢幕 */
+    .ql-toolbar { display: none !important; }
+    .ql-container.ql-snow { border: none !important; font-family: inherit; font-size: inherit; height: auto; }
     .ql-editor {
       min-height: 50px; padding: 16px 8px 60px 8px; 
-      font-size: 48px; line-height: 1.25; color: inherit !important;
+      font-family: inherit !important; font-size: 48px; line-height: 1.25; color: inherit !important;
       white-space: pre-wrap; word-break: break-all; text-align: justify; overflow-y: visible;
     }
-    
-    #remoteCursorsContainer { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 50; }
-    .remote-cursor { position: absolute; width: 3px; pointer-events: none; transition: all 0.1s ease; }
-    .remote-cursor-bubble { position: absolute; top: 100%; left: -2px; margin-top: 4px; background: rgba(0,0,0,0.8); color: #fff; font-size: 14px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: none; }
   </style>
 </head>
 <body>
   <div id="viewerContainer">
-    <div id="editor"></div>
-    <div id="remoteCursorsContainer"></div>
+    <div id="editor">等待聽打員連線...</div>
   </div>
 
   <script>
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity });
     const roomId = "{{ room_id }}";
     
-    const quill = new Quill('#editor', { theme: 'snow', modules: { toolbar: false }, readOnly: true });
-    const remoteCursorsContainer = document.getElementById('remoteCursorsContainer');
-    const remoteCursors = new Map();
+    // 初始化觀眾端唯讀引擎
+    Quill.register('modules/cursors', QuillCursors);
+    const quill = new Quill('#editor', { 
+      theme: 'snow', 
+      readOnly: true, 
+      modules: { toolbar: false, cursors: { transformOnTextChange: true, hideDelayMs: 5000, hideSpeedMs: 0 } },
+      formats: [] 
+    });
+    const cursors = quill.getModule('cursors');
     const qlEditor = document.querySelector('.ql-editor');
+    const viewerContainer = document.getElementById('viewerContainer');
+    let currentMasterClientId = null;
 
     socket.on('connect', () => { quill.setText(''); socket.emit('join', { room: roomId, is_editor: false }); });
 
@@ -63,51 +70,31 @@
     }
 
     socket.on('remote_operation', data => {
-      if (data.is_clear) { quill.setText(''); return; }
+      if (data.is_clear) { quill.setText('\n'); return; }
       const ops = data.ops || [];
       for (let op of ops) {
         if (op.type === 'insert') quill.insertText(op.pos, op.text, 'api');
         else if (op.type === 'delete') quill.deleteText(op.pos, op.len, 'api');
       }
+      viewerContainer.scrollTop = viewerContainer.scrollHeight;
     });
 
-    socket.on('remote_composing_stream', data => {
-      if (!data || !data.client_id) return;
-      updateRemoteCursor(data.client_id, data.cursor_index, data.composing_text);
+    socket.on('role_status_update', data => {
+      currentMasterClientId = data.master_client_id;
     });
 
     socket.on('cursor_update', data => {
       if (!data || !data.client_id) return;
-      updateRemoteCursor(data.client_id, data.cursor_index, '');
+      const isMaster = (data.client_id === currentMasterClientId);
+      const color = isMaster ? '#16a34a' : '#0284c7';
+      const name = isMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
+      cursors.createCursor(data.client_id, name, color);
+      cursors.moveCursor(data.client_id, { index: data.cursor_index, length: data.cursor_length || 0 });
     });
 
-    function updateRemoteCursor(cid, cursorIndex, composingText = '') {
-      let item = remoteCursors.get(cid);
-      if (!item) {
-        const el = document.createElement('div'); el.className = 'remote-cursor'; el.style.backgroundColor = '#16a34a'; el.style.boxShadow = `0 0 6px #16a34a`;
-        const bubble = document.createElement('div'); bubble.className = 'remote-cursor-bubble';
-        el.appendChild(bubble);
-        remoteCursorsContainer.appendChild(el);
-        item = { element: el, bubble: bubble, fadeTimer: null };
-        remoteCursors.set(cid, item);
-      }
-      
-      const bounds = quill.getBounds(cursorIndex);
-      if (bounds) {
-        item.element.style.left = bounds.left + 'px';
-        item.element.style.top = bounds.top + 'px';
-        item.element.style.height = bounds.height + 'px';
-        if (composingText) {
-          item.bubble.innerText = "正在輸入: " + composingText;
-          item.bubble.style.display = 'block';
-        } else {
-          item.bubble.style.display = 'none';
-        }
-        item.element.style.opacity = '1';
-        clearTimeout(item.fadeTimer);
-        item.fadeTimer = setTimeout(() => { if (item.element) item.element.style.opacity = '0'; }, 5000);
-      }
-    }
+    socket.on('cursor_remove', data => {
+      if (data && data.client_id) cursors.removeCursor(data.client_id);
+    });
   </script>
 </body>
 </html>
