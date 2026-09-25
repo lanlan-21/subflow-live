@@ -17,7 +17,7 @@
     }
     #viewerContainer { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; }
     
-    /* 覆蓋 Quill 預設，呈現無干擾的極簡大螢幕 */
+    /* 覆蓋 Quill 預設，呈現無干擾的大螢幕 */
     .ql-toolbar { display: none !important; }
     .ql-container.ql-snow { border: none !important; font-family: inherit; font-size: inherit; height: auto; }
     .ql-editor {
@@ -41,7 +41,7 @@
     const quill = new Quill('#editor', { 
       theme: 'snow', 
       readOnly: true, 
-      modules: { toolbar: false, cursors: { transformOnTextChange: true, hideDelayMs: 5000, hideSpeedMs: 0 } },
+      modules: { toolbar: false, cursors: { transformOnTextChange: true, hideDelayMs: 3000, hideSpeedMs: 400 } },
       formats: [] 
     });
     const cursors = quill.getModule('cursors');
@@ -49,10 +49,10 @@
     const viewerContainer = document.getElementById('viewerContainer');
     let currentMasterClientId = null;
 
-    socket.on('connect', () => { quill.setText(''); socket.emit('join', { room: roomId, is_editor: false }); });
+    socket.on('connect', () => { quill.setText('\n'); socket.emit('join', { room: roomId, is_editor: false }); });
 
     socket.on('init_document', data => {
-      if (data && data.text) quill.setText(data.text);
+      if (data && data.delta) quill.setContents(data.delta);
       if (data && data.settings) applySettings(data.settings);
     });
 
@@ -72,11 +72,20 @@
     socket.on('remote_operation', data => {
       if (data.is_clear) { quill.setText('\n'); return; }
       const ops = data.ops || [];
+      const Delta = Quill.import('delta');
       for (let op of ops) {
-        if (op.type === 'insert') quill.insertText(op.pos, op.text, 'api');
-        else if (op.type === 'delete') quill.deleteText(op.pos, op.len, 'api');
+        let opDelta = new Delta();
+        if (op.pos > 0) opDelta.retain(op.pos);
+        if (op.type === 'insert') opDelta.insert(op.text);
+        else if (op.type === 'delete') opDelta.delete(op.len);
+        quill.updateContents(opDelta, 'api');
       }
-      viewerContainer.scrollTop = viewerContainer.scrollHeight;
+      
+      // 智能滾動：只有當畫面已經在底部附近時，才自動往下滾
+      const isNearBottom = viewerContainer.scrollHeight - viewerContainer.scrollTop - viewerContainer.clientHeight < 150;
+      if (isNearBottom) {
+         viewerContainer.scrollTop = viewerContainer.scrollHeight;
+      }
     });
 
     socket.on('role_status_update', data => {
