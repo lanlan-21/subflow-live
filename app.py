@@ -8,6 +8,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
+# 開啟異步多執行緒模式，確保萬字運算不卡 I/O
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 rooms = {}
@@ -32,7 +33,7 @@ def cancel_room_cleanup(room_id):
     if timer:
         timer.cancel()
 
-# 核心 OT 演算法：處理文字位置衝突
+# 極速 OT 矩陣碰撞演算法
 def transform_primitive(op1, op2, priority):
     if not op1 or not op2:
         return op1
@@ -118,7 +119,8 @@ def handle_join(data):
         rooms[room_id] = {
             "text": "\n", "version": 0, "history": [],
             "settings": {"theme": "dark", "size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
-            "master_client_id": None, "editors": {}, "viewers": set()
+            "master_client_id": None, "editors": {}, "viewers": set(),
+            "cached_delta": None 
         }
 
     join_room(room_id)
@@ -127,16 +129,34 @@ def handle_join(data):
         rooms[room_id]["editors"][client_id] = sid
         if rooms[room_id]["master_client_id"] is None:
             rooms[room_id]["master_client_id"] = client_id
+            emit('init_document', {'delta': None, 'settings': rooms[room_id]["settings"]}, to=sid)
+        else:
+            master_sid = rooms[room_id]["editors"].get(rooms[room_id]["master_client_id"])
+            if master_sid:
+                emit('request_full_document', {'target_sid': sid}, to=master_sid)
+            else:
+                emit('init_document', {'delta': rooms[room_id]["cached_delta"], 'settings': rooms[room_id]["settings"]}, to=sid)
     else:
         rooms[room_id]["viewers"].add(sid)
+        master_sid = rooms[room_id]["editors"].get(rooms[room_id]["master_client_id"])
+        if master_sid:
+            emit('request_full_document', {'target_sid': sid}, to=master_sid)
+        else:
+            emit('init_document', {'delta': rooms[room_id]["cached_delta"], 'settings': rooms[room_id]["settings"]}, to=sid)
 
-    emit('init_document', {
-        "text": rooms[room_id]["text"],
-        "version": rooms[room_id]["version"],
-        "settings": rooms[room_id]["settings"]
-    }, to=sid)
     broadcast_roles_status(room_id)
 
+@socketio.on('sync_full_document')
+def handle_sync_full_document(data):
+    room_id = data.get('room')
+    target_sid = data.get('target_sid')
+    delta = data.get('delta')
+    if room_id in rooms:
+        rooms[room_id]['cached_delta'] = delta
+        if target_sid:
+            emit('init_document', {'delta': delta, 'settings': rooms[room_id]['settings']}, to=target_sid)
+
+# 處理批量高頻輸入，伺服器記憶體輕量化
 @socketio.on('client_operation')
 def handle_client_operation(data):
     room_id = data.get('room')
@@ -152,33 +172,45 @@ def handle_client_operation(data):
     if data.get('is_clear'):
         rdata["text"] = "\n"
         rdata["version"] += 1
-        rdata["history"].append({'version': rdata["version"], 'op': {'type': 'clear'}})
+        rdata["history"].append({'version': rdata["version"], 'ops': [{'type': 'clear'}]})
+        rdata["cached_delta"] = None
         emit('remote_operation', {'version': rdata["version"], 'is_clear': True, 'client_id': client_id}, to=room_id, include_self=False)
         emit('ack_operation', {'version': rdata["version"]}, to=sid)
         return
 
-    transformed_ops = []
+    ops = []
     for op in raw_ops:
+        if op.get('type') == 'insert':
+            op['text'] = op['text'].replace('\r\n', '\n').replace('\r', '\n')
+        ops.append(op)
+
+    transformed_batch = []
+    for op in ops:
         curr = dict(op)
         for hist in rdata["history"]:
             if hist['version'] > base_version:
-                if hist['op'].get('type') != 'clear':
-                    curr = transform_primitive(curr, hist['op'], priority='right')
-                    if curr is None: break
+                for hist_op in hist['ops']:
+                    if hist_op.get('type') != 'clear':
+                        curr = transform_primitive(curr, hist_op, priority='right')
+                        if curr is None: break
+                if curr is None: break
         if curr:
-            transformed_ops.append(curr)
+            transformed_batch.append(curr)
             rdata["text"] = apply_op_to_text(rdata["text"], curr)
-            rdata["version"] += 1
-            rdata["history"].append({'version': rdata["version"], 'op': curr})
 
-    if len(rdata["history"]) > 600: rdata["history"] = rdata["history"][-600:]
-    emit('ack_operation', {'version': rdata["version"]}, to=sid)
+    if transformed_batch:
+        rdata["version"] += 1
+        rdata["history"].append({'version': rdata["version"], 'ops': transformed_batch})
+        # 嚴格控制歷史長度，防止伺服器長期運作記憶體爆炸
+        if len(rdata["history"]) > 600: rdata["history"] = rdata["history"][-600:]
 
-    if transformed_ops:
+        emit('ack_operation', {'version': rdata["version"]}, to=sid)
         emit('remote_operation', {
-            'version': rdata["version"], 'ops': transformed_ops,
+            'version': rdata["version"], 'ops': transformed_batch,
             'client_id': client_id
         }, to=room_id, include_self=False)
+    else:
+        emit('ack_operation', {'version': rdata["version"]}, to=sid)
 
 @socketio.on('cursor_move')
 def handle_cursor_move(data):
