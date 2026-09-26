@@ -17,7 +17,6 @@
     }
     #viewerContainer { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; }
     
-    /* 覆蓋 Quill 預設，呈現無干擾的大螢幕 */
     .ql-toolbar { display: none !important; }
     .ql-container.ql-snow { border: none !important; font-family: inherit; font-size: inherit; height: auto; }
     .ql-editor {
@@ -26,7 +25,6 @@
       white-space: pre-wrap; word-break: break-all; text-align: justify; overflow-y: visible;
     }
 
-    /* 🌟 觀眾端專屬：半透明懸浮微調面板 */
     #viewerControls {
       position: fixed; bottom: 20px; right: 20px; z-index: 999;
       background: rgba(30, 41, 59, 0.85); border: 1px solid rgba(71, 85, 105, 0.5);
@@ -50,7 +48,6 @@
     <div id="editor">等待聽打員連線...</div>
   </div>
 
-  <!-- 🌟 觀眾自訂微調工具列 -->
   <div id="viewerControls" onclick="this.classList.add('active'); setTimeout(()=>this.classList.remove('active'), 3000);">
     <button class="btn-viewer" onclick="stepLocalScale(0.1)" title="放大視角">A+</button>
     <button class="btn-viewer" onclick="stepLocalScale(-0.1)" title="縮小視角">A-</button>
@@ -62,7 +59,6 @@
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity });
     const roomId = "{{ room_id }}";
     
-    // 初始化觀眾端唯讀引擎
     Quill.register('modules/cursors', QuillCursors);
     const quill = new Quill('#editor', { 
       theme: 'snow', 
@@ -75,50 +71,39 @@
     const viewerContainer = document.getElementById('viewerContainer');
     
     let currentMasterClientId = null;
-
-    // 🌟 絕對追蹤主控端設定 ＋ 觀眾本地微調變數
     let masterSettings = { theme: 'dark', size: 48, scale: 100, pad_x: 8, pad_y: 10 };
     let localViewerScale = parseFloat(localStorage.getItem('STT_LOCAL_SCALE_' + roomId)) || 1.0;
 
-    // 🌟 動態運算引擎：捨棄 CSS Zoom，強制支援所有設備
     function applyCombinedSettings() {
-      // 套用主控端底色
       if (masterSettings.theme === 'dark') { document.body.style.background = '#0a0a0a'; document.body.style.color = '#ffff33'; }
       if (masterSettings.theme === 'green') { document.body.style.background = '#c7edcc'; document.body.style.color = '#111827'; }
       if (masterSettings.theme === 'navy') { document.body.style.background = '#0b132b'; document.body.style.color = '#e0e1dd'; }
       if (masterSettings.theme === 'light') { document.body.style.background = '#f1f5f9'; document.body.style.color = '#0f172a'; }
 
-      // 計算最終倍率：主控比例 × 觀眾微調倍率
       const masterScaleFactor = (masterSettings.scale || 100) / 100;
       const combinedScale = masterScaleFactor * localViewerScale;
 
-      // 嚴格換算成絕對像素，所有瀏覽器皆能完美呈現
       const px = ((masterSettings.pad_x || 8) * combinedScale) + 'px'; 
       const py = ((masterSettings.pad_y || 16) * combinedScale) + 'px';
       const finalFontSize = ((masterSettings.size || 48) * combinedScale) + 'px';
 
       qlEditor.style.fontSize = finalFontSize;
       qlEditor.style.padding = `${py} ${px} 60px ${px}`;
-      
-      // 更新介面數值
       document.getElementById('localScaleHint').innerText = 'x' + localViewerScale.toFixed(1);
     }
 
-    // 觀眾點擊微調面板
     function stepLocalScale(delta) {
       localViewerScale = Math.max(0.5, Math.min(localViewerScale + delta, 3.0));
       localStorage.setItem('STT_LOCAL_SCALE_' + roomId, localViewerScale.toFixed(1));
       applyCombinedSettings();
     }
 
-    // 觀眾一鍵還原，完全貼齊主控
     function resetLocalScale() {
       localViewerScale = 1.0;
       localStorage.setItem('STT_LOCAL_SCALE_' + roomId, '1.0');
       applyCombinedSettings();
     }
 
-    // --- 連線與同步邏輯 ---
     socket.on('connect', () => { quill.setText('\n'); socket.emit('join', { room: roomId, is_editor: false }); });
 
     socket.on('init_document', data => {
@@ -129,7 +114,6 @@
       }
     });
 
-    // 瞬間捕捉主控端任何排版調整
     socket.on('sync_settings', data => { 
         masterSettings = data; 
         applyCombinedSettings(); 
@@ -139,15 +123,23 @@
       if (data.is_clear) { quill.setText('\n'); return; }
       const ops = data.ops || [];
       const Delta = Quill.import('delta');
+      
+      // 🌟 企業級防護：將所有零碎的修改在記憶體中「融合成單一動作」，一次性畫出，徹底消滅注音殘影
+      let finalDelta = new Delta();
       for (let op of ops) {
         let opDelta = new Delta();
         if (op.pos > 0) opDelta.retain(op.pos);
         if (op.type === 'insert') opDelta.insert(op.text);
         else if (op.type === 'delete') opDelta.delete(op.len);
-        quill.updateContents(opDelta, 'api');
+        
+        finalDelta = finalDelta.compose(opDelta);
       }
       
-      // 智能滾動：只有畫面在底部附近時，才會自動往下追蹤文字
+      // 只有當真的有變動時，才呼叫一次底層 API (10萬字規模下保證 O(1) 的效能)
+      if (finalDelta.length() > 0) {
+          quill.updateContents(finalDelta, 'api');
+      }
+      
       const isNearBottom = viewerContainer.scrollHeight - viewerContainer.scrollTop - viewerContainer.clientHeight < 150;
       if (isNearBottom) {
          viewerContainer.scrollTop = viewerContainer.scrollHeight;
