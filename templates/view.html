@@ -22,14 +22,40 @@
     .ql-container.ql-snow { border: none !important; font-family: inherit; font-size: inherit; height: auto; }
     .ql-editor {
       min-height: 50px; padding: 16px 8px 60px 8px; 
-      font-family: inherit !important; font-size: 48px; line-height: 1.25; color: inherit !important;
+      font-family: inherit !important; line-height: 1.25; color: inherit !important;
       white-space: pre-wrap; word-break: break-all; text-align: justify; overflow-y: visible;
     }
+
+    /* 🌟 觀眾端專屬：半透明懸浮微調面板 */
+    #viewerControls {
+      position: fixed; bottom: 20px; right: 20px; z-index: 999;
+      background: rgba(30, 41, 59, 0.85); border: 1px solid rgba(71, 85, 105, 0.5);
+      padding: 6px 8px; border-radius: 8px; backdrop-filter: blur(4px);
+      display: flex; gap: 6px; align-items: center;
+      opacity: 0.2; transition: opacity 0.3s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    #viewerControls:hover, #viewerControls.active { opacity: 1; }
+    .btn-viewer {
+      background: #334155; color: #f8fafc; border: 1px solid #475569;
+      padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;
+    }
+    .btn-viewer:hover { background: #475569; }
+    .btn-viewer-reset { background: #0284c7; border-color: #0369a1; }
+    .btn-viewer-reset:hover { background: #0369a1; }
+    #localScaleHint { color: #94a3b8; font-size: 12px; margin-left: 4px; font-family: monospace; width: 36px; text-align: right; }
   </style>
 </head>
 <body>
   <div id="viewerContainer">
     <div id="editor">等待聽打員連線...</div>
+  </div>
+
+  <!-- 🌟 觀眾自訂微調工具列 -->
+  <div id="viewerControls" onclick="this.classList.add('active'); setTimeout(()=>this.classList.remove('active'), 3000);">
+    <button class="btn-viewer" onclick="stepLocalScale(0.1)" title="放大視角">A+</button>
+    <button class="btn-viewer" onclick="stepLocalScale(-0.1)" title="縮小視角">A-</button>
+    <button class="btn-viewer btn-viewer-reset" onclick="resetLocalScale()" title="還原至主控端設定">還原跟隨</button>
+    <span id="localScaleHint">x1.0</span>
   </div>
 
   <script>
@@ -47,27 +73,67 @@
     const cursors = quill.getModule('cursors');
     const qlEditor = document.querySelector('.ql-editor');
     const viewerContainer = document.getElementById('viewerContainer');
+    
     let currentMasterClientId = null;
 
+    // 🌟 絕對追蹤主控端設定 ＋ 觀眾本地微調變數
+    let masterSettings = { theme: 'dark', size: 48, scale: 100, pad_x: 8, pad_y: 10 };
+    let localViewerScale = parseFloat(localStorage.getItem('STT_LOCAL_SCALE_' + roomId)) || 1.0;
+
+    // 🌟 動態運算引擎：捨棄 CSS Zoom，強制支援所有設備
+    function applyCombinedSettings() {
+      // 套用主控端底色
+      if (masterSettings.theme === 'dark') { document.body.style.background = '#0a0a0a'; document.body.style.color = '#ffff33'; }
+      if (masterSettings.theme === 'green') { document.body.style.background = '#c7edcc'; document.body.style.color = '#111827'; }
+      if (masterSettings.theme === 'navy') { document.body.style.background = '#0b132b'; document.body.style.color = '#e0e1dd'; }
+      if (masterSettings.theme === 'light') { document.body.style.background = '#f1f5f9'; document.body.style.color = '#0f172a'; }
+
+      // 計算最終倍率：主控比例 × 觀眾微調倍率
+      const masterScaleFactor = (masterSettings.scale || 100) / 100;
+      const combinedScale = masterScaleFactor * localViewerScale;
+
+      // 嚴格換算成絕對像素，所有瀏覽器皆能完美呈現
+      const px = ((masterSettings.pad_x || 8) * combinedScale) + 'px'; 
+      const py = ((masterSettings.pad_y || 16) * combinedScale) + 'px';
+      const finalFontSize = ((masterSettings.size || 48) * combinedScale) + 'px';
+
+      qlEditor.style.fontSize = finalFontSize;
+      qlEditor.style.padding = `${py} ${px} 60px ${px}`;
+      
+      // 更新介面數值
+      document.getElementById('localScaleHint').innerText = 'x' + localViewerScale.toFixed(1);
+    }
+
+    // 觀眾點擊微調面板
+    function stepLocalScale(delta) {
+      localViewerScale = Math.max(0.5, Math.min(localViewerScale + delta, 3.0));
+      localStorage.setItem('STT_LOCAL_SCALE_' + roomId, localViewerScale.toFixed(1));
+      applyCombinedSettings();
+    }
+
+    // 觀眾一鍵還原，完全貼齊主控
+    function resetLocalScale() {
+      localViewerScale = 1.0;
+      localStorage.setItem('STT_LOCAL_SCALE_' + roomId, '1.0');
+      applyCombinedSettings();
+    }
+
+    // --- 連線與同步邏輯 ---
     socket.on('connect', () => { quill.setText('\n'); socket.emit('join', { room: roomId, is_editor: false }); });
 
     socket.on('init_document', data => {
       if (data && data.delta) quill.setContents(data.delta);
-      if (data && data.settings) applySettings(data.settings);
+      if (data && data.settings) {
+          masterSettings = data.settings;
+          applyCombinedSettings();
+      }
     });
 
-    socket.on('sync_settings', data => { applySettings(data); });
-
-    function applySettings(settings) {
-      if (settings.theme === 'dark') { document.body.style.background = '#0a0a0a'; document.body.style.color = '#ffff33'; }
-      if (settings.theme === 'green') { document.body.style.background = '#c7edcc'; document.body.style.color = '#111827'; }
-      if (settings.theme === 'navy') { document.body.style.background = '#0b132b'; document.body.style.color = '#e0e1dd'; }
-      if (settings.theme === 'light') { document.body.style.background = '#f1f5f9'; document.body.style.color = '#0f172a'; }
-      const px = (settings.pad_x || 8) + 'px'; const py = (settings.pad_y || 16) + 'px';
-      qlEditor.style.fontSize = (settings.size || 48) + 'px';
-      qlEditor.style.padding = `${py} ${px} 60px ${px}`;
-      qlEditor.style.zoom = (settings.scale || 100) / 100;
-    }
+    // 瞬間捕捉主控端任何排版調整
+    socket.on('sync_settings', data => { 
+        masterSettings = data; 
+        applyCombinedSettings(); 
+    });
 
     socket.on('remote_operation', data => {
       if (data.is_clear) { quill.setText('\n'); return; }
@@ -81,7 +147,7 @@
         quill.updateContents(opDelta, 'api');
       }
       
-      // 智能滾動：只有當畫面已經在底部附近時，才自動往下滾
+      // 智能滾動：只有畫面在底部附近時，才會自動往下追蹤文字
       const isNearBottom = viewerContainer.scrollHeight - viewerContainer.scrollTop - viewerContainer.clientHeight < 150;
       if (isNearBottom) {
          viewerContainer.scrollTop = viewerContainer.scrollHeight;
