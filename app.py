@@ -8,20 +8,23 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
-# 開啟異步多執行緒模式，確保萬字運算不卡 I/O
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# 加入心跳容錯參數，防止會場網路瞬斷導致不同步
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=60, ping_interval=25)
 
 rooms = {}
+room_locks = {} # 🌟 企業級房間鎖，消滅並發時空錯亂
 cleanup_timers = {}
 CLEANUP_TIMEOUT_SECONDS = 1800 
 
 def schedule_room_cleanup(room_id):
     cancel_room_cleanup(room_id)
     def cleanup_job():
-        if room_id in rooms:
-            total_connected = len(rooms[room_id].get("editors", {})) + len(rooms[room_id].get("viewers", set()))
-            if total_connected == 0:
-                rooms.pop(room_id, None)
+        with room_locks.get(room_id, threading.Lock()):
+            if room_id in rooms:
+                total_connected = len(rooms[room_id].get("editors", {})) + len(rooms[room_id].get("viewers", set()))
+                if total_connected == 0:
+                    rooms.pop(room_id, None)
+                    room_locks.pop(room_id, None)
         cleanup_timers.pop(room_id, None)
     timer = threading.Timer(CLEANUP_TIMEOUT_SECONDS, cleanup_job)
     timer.daemon = True
@@ -33,7 +36,6 @@ def cancel_room_cleanup(room_id):
     if timer:
         timer.cancel()
 
-# 極速 OT 矩陣碰撞演算法
 def transform_primitive(op1, op2, priority):
     if not op1 or not op2:
         return op1
@@ -114,35 +116,39 @@ def handle_join(data):
     if not room_id: return
 
     cancel_room_cleanup(room_id)
+    
+    if room_id not in room_locks:
+        room_locks[room_id] = threading.Lock()
 
-    if room_id not in rooms:
-        rooms[room_id] = {
-            "text": "\n", "version": 0, "history": [],
-            "settings": {"theme": "dark", "size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
-            "master_client_id": None, "editors": {}, "viewers": set(),
-            "cached_delta": None 
-        }
+    with room_locks[room_id]:
+        if room_id not in rooms:
+            rooms[room_id] = {
+                "text": "\n", "version": 0, "history": [],
+                "settings": {"theme": "dark", "size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
+                "master_client_id": None, "editors": {}, "viewers": set(),
+                "cached_delta": None 
+            }
 
-    join_room(room_id)
+        join_room(room_id)
 
-    if is_editor:
-        rooms[room_id]["editors"][client_id] = sid
-        if rooms[room_id]["master_client_id"] is None:
-            rooms[room_id]["master_client_id"] = client_id
-            emit('init_document', {'delta': None, 'settings': rooms[room_id]["settings"]}, to=sid)
+        if is_editor:
+            rooms[room_id]["editors"][client_id] = sid
+            if rooms[room_id]["master_client_id"] is None:
+                rooms[room_id]["master_client_id"] = client_id
+                emit('init_document', {'delta': None, 'settings': rooms[room_id]["settings"]}, to=sid)
+            else:
+                master_sid = rooms[room_id]["editors"].get(rooms[room_id]["master_client_id"])
+                if master_sid:
+                    emit('request_full_document', {'target_sid': sid}, to=master_sid)
+                else:
+                    emit('init_document', {'delta': rooms[room_id]["cached_delta"], 'settings': rooms[room_id]["settings"]}, to=sid)
         else:
+            rooms[room_id]["viewers"].add(sid)
             master_sid = rooms[room_id]["editors"].get(rooms[room_id]["master_client_id"])
             if master_sid:
                 emit('request_full_document', {'target_sid': sid}, to=master_sid)
             else:
                 emit('init_document', {'delta': rooms[room_id]["cached_delta"], 'settings': rooms[room_id]["settings"]}, to=sid)
-    else:
-        rooms[room_id]["viewers"].add(sid)
-        master_sid = rooms[room_id]["editors"].get(rooms[room_id]["master_client_id"])
-        if master_sid:
-            emit('request_full_document', {'target_sid': sid}, to=master_sid)
-        else:
-            emit('init_document', {'delta': rooms[room_id]["cached_delta"], 'settings': rooms[room_id]["settings"]}, to=sid)
 
     broadcast_roles_status(room_id)
 
@@ -151,12 +157,14 @@ def handle_sync_full_document(data):
     room_id = data.get('room')
     target_sid = data.get('target_sid')
     delta = data.get('delta')
-    if room_id in rooms:
-        rooms[room_id]['cached_delta'] = delta
-        if target_sid:
-            emit('init_document', {'delta': delta, 'settings': rooms[room_id]['settings']}, to=target_sid)
+    if not room_id: return
+    
+    with room_locks.get(room_id, threading.Lock()):
+        if room_id in rooms:
+            rooms[room_id]['cached_delta'] = delta
+            if target_sid:
+                emit('init_document', {'delta': delta, 'settings': rooms[room_id]['settings']}, to=target_sid)
 
-# 處理批量高頻輸入，伺服器記憶體輕量化
 @socketio.on('client_operation')
 def handle_client_operation(data):
     room_id = data.get('room')
@@ -165,52 +173,54 @@ def handle_client_operation(data):
     if not room_id or room_id not in rooms: return
 
     cancel_room_cleanup(room_id)
-    rdata = rooms[room_id]
-    base_version = data.get('base_version', 0)
-    raw_ops = data.get('ops', [])
+    
+    # 🌟 嚴格鎖定執行緒，保證 10 萬字極限下封包絕對不亂序
+    with room_locks.get(room_id, threading.Lock()):
+        rdata = rooms[room_id]
+        base_version = data.get('base_version', 0)
+        raw_ops = data.get('ops', [])
 
-    if data.get('is_clear'):
-        rdata["text"] = "\n"
-        rdata["version"] += 1
-        rdata["history"].append({'version': rdata["version"], 'ops': [{'type': 'clear'}]})
-        rdata["cached_delta"] = None
-        emit('remote_operation', {'version': rdata["version"], 'is_clear': True, 'client_id': client_id}, to=room_id, include_self=False)
-        emit('ack_operation', {'version': rdata["version"]}, to=sid)
-        return
+        if data.get('is_clear'):
+            rdata["text"] = "\n"
+            rdata["version"] += 1
+            rdata["history"].append({'version': rdata["version"], 'ops': [{'type': 'clear'}]})
+            rdata["cached_delta"] = None
+            emit('remote_operation', {'version': rdata["version"], 'is_clear': True, 'client_id': client_id}, to=room_id, include_self=False)
+            emit('ack_operation', {'version': rdata["version"]}, to=sid)
+            return
 
-    ops = []
-    for op in raw_ops:
-        if op.get('type') == 'insert':
-            op['text'] = op['text'].replace('\r\n', '\n').replace('\r', '\n')
-        ops.append(op)
+        ops = []
+        for op in raw_ops:
+            if op.get('type') == 'insert':
+                op['text'] = op['text'].replace('\r\n', '\n').replace('\r', '\n')
+            ops.append(op)
 
-    transformed_batch = []
-    for op in ops:
-        curr = dict(op)
-        for hist in rdata["history"]:
-            if hist['version'] > base_version:
-                for hist_op in hist['ops']:
-                    if hist_op.get('type') != 'clear':
-                        curr = transform_primitive(curr, hist_op, priority='right')
-                        if curr is None: break
-                if curr is None: break
-        if curr:
-            transformed_batch.append(curr)
-            rdata["text"] = apply_op_to_text(rdata["text"], curr)
+        transformed_batch = []
+        for op in ops:
+            curr = dict(op)
+            for hist in rdata["history"]:
+                if hist['version'] > base_version:
+                    for hist_op in hist['ops']:
+                        if hist_op.get('type') != 'clear':
+                            curr = transform_primitive(curr, hist_op, priority='right')
+                            if curr is None: break
+                    if curr is None: break
+            if curr:
+                transformed_batch.append(curr)
+                rdata["text"] = apply_op_to_text(rdata["text"], curr)
 
-    if transformed_batch:
-        rdata["version"] += 1
-        rdata["history"].append({'version': rdata["version"], 'ops': transformed_batch})
-        # 嚴格控制歷史長度，防止伺服器長期運作記憶體爆炸
-        if len(rdata["history"]) > 600: rdata["history"] = rdata["history"][-600:]
+        if transformed_batch:
+            rdata["version"] += 1
+            rdata["history"].append({'version': rdata["version"], 'ops': transformed_batch})
+            if len(rdata["history"]) > 600: rdata["history"] = rdata["history"][-600:]
 
-        emit('ack_operation', {'version': rdata["version"]}, to=sid)
-        emit('remote_operation', {
-            'version': rdata["version"], 'ops': transformed_batch,
-            'client_id': client_id
-        }, to=room_id, include_self=False)
-    else:
-        emit('ack_operation', {'version': rdata["version"]}, to=sid)
+            emit('ack_operation', {'version': rdata["version"]}, to=sid)
+            emit('remote_operation', {
+                'version': rdata["version"], 'ops': transformed_batch,
+                'client_id': client_id
+            }, to=room_id, include_self=False)
+        else:
+            emit('ack_operation', {'version': rdata["version"]}, to=sid)
 
 @socketio.on('cursor_move')
 def handle_cursor_move(data):
@@ -221,45 +231,48 @@ def handle_cursor_move(data):
 def handle_update_settings(data):
     room_id = data.get('room')
     client_id = data.get('client_id')
-    if room_id in rooms and client_id == rooms[room_id].get("master_client_id"):
-        rooms[room_id]["settings"]["theme"] = data.get('theme', 'dark')
-        rooms[room_id]["settings"]["size"] = data.get('size', 48)
-        rooms[room_id]["settings"]["scale"] = data.get('scale', 100)
-        rooms[room_id]["settings"]["pad_x"] = data.get('pad_x', 8)
-        rooms[room_id]["settings"]["pad_y"] = data.get('pad_y', 10)
-        emit('sync_settings', rooms[room_id]["settings"], to=room_id, include_self=False)
+    with room_locks.get(room_id, threading.Lock()):
+        if room_id in rooms and client_id == rooms[room_id].get("master_client_id"):
+            rooms[room_id]["settings"]["theme"] = data.get('theme', 'dark')
+            rooms[room_id]["settings"]["size"] = data.get('size', 48)
+            rooms[room_id]["settings"]["scale"] = data.get('scale', 100)
+            rooms[room_id]["settings"]["pad_x"] = data.get('pad_x', 8)
+            rooms[room_id]["settings"]["pad_y"] = data.get('pad_y', 10)
+            emit('sync_settings', rooms[room_id]["settings"], to=room_id, include_self=False)
 
 @socketio.on('claim_master')
 def handle_claim_master(data):
     room_id = data.get('room')
     client_id = data.get('client_id')
-    if room_id in rooms and client_id in rooms[room_id]["editors"]:
-        rooms[room_id]["master_client_id"] = client_id
-        broadcast_roles_status(room_id)
+    with room_locks.get(room_id, threading.Lock()):
+        if room_id in rooms and client_id in rooms[room_id]["editors"]:
+            rooms[room_id]["master_client_id"] = client_id
+            broadcast_roles_status(room_id)
 
 @socketio.on('disconnect')
 def handle_disconnect():
     sid = request.sid
     for room_id, rdata in list(rooms.items()):
-        modified = False
-        disconnected_cid = None
-        for cid, csid in list(rdata["editors"].items()):
-            if csid == sid:
-                disconnected_cid = cid
-                break
-        if disconnected_cid:
-            rdata["editors"].pop(disconnected_cid, None)
-            modified = True
-            emit('cursor_remove', {'client_id': disconnected_cid}, to=room_id)
-            if rdata["master_client_id"] == disconnected_cid:
-                rdata["master_client_id"] = next(iter(rdata["editors"])) if rdata["editors"] else None
-        if sid in rdata["viewers"]:
-            rdata["viewers"].remove(sid)
-            modified = True
-        if modified:
-            broadcast_roles_status(room_id)
-            if len(rdata["editors"]) + len(rdata["viewers"]) == 0:
-                schedule_room_cleanup(room_id)
+        with room_locks.get(room_id, threading.Lock()):
+            modified = False
+            disconnected_cid = None
+            for cid, csid in list(rdata["editors"].items()):
+                if csid == sid:
+                    disconnected_cid = cid
+                    break
+            if disconnected_cid:
+                rdata["editors"].pop(disconnected_cid, None)
+                modified = True
+                emit('cursor_remove', {'client_id': disconnected_cid}, to=room_id)
+                if rdata["master_client_id"] == disconnected_cid:
+                    rdata["master_client_id"] = next(iter(rdata["editors"])) if rdata["editors"] else None
+            if sid in rdata["viewers"]:
+                rdata["viewers"].remove(sid)
+                modified = True
+            if modified:
+                broadcast_roles_status(room_id)
+                if len(rdata["editors"]) + len(rdata["viewers"]) == 0:
+                    schedule_room_cleanup(room_id)
 
 def broadcast_roles_status(room_id):
     if room_id not in rooms: return
