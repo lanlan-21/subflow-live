@@ -60,14 +60,12 @@
     const roomId = "{{ room_id }}";
     const Delta = Quill.import('delta');
 
-    // 🌟 觀眾端同樣套用永久身分證，確保關閉重開時不會產生幽靈人數
     let myClientId = localStorage.getItem('STT_CLIENT_ID');
     if (!myClientId) {
       myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
       localStorage.setItem('STT_CLIENT_ID', myClientId);
     }
 
-    // 🌟 優雅離線機制
     window.addEventListener('beforeunload', () => {
         socket.disconnect();
     });
@@ -117,7 +115,6 @@
       applyCombinedSettings();
     }
 
-    // 附帶自己的 ClientID，讓伺服器能精準清退舊連線
     socket.on('connect', () => { socket.emit('join', { room: roomId, client_id: myClientId, is_editor: false }); });
 
     socket.on('init_document', data => {
@@ -151,10 +148,13 @@
           quill.updateContents(finalDelta, 'api');
       }
       
-      const isNearBottom = viewerContainer.scrollHeight - viewerContainer.scrollTop - viewerContainer.clientHeight < 150;
-      if (isNearBottom) {
-         viewerContainer.scrollTop = viewerContainer.scrollHeight;
-      }
+      // 🌟 效能革命：將滾動偵測交給硬體 GPU，徹底解放主執行緒
+      requestAnimationFrame(() => {
+          const isNearBottom = viewerContainer.scrollHeight - viewerContainer.scrollTop - viewerContainer.clientHeight < 150;
+          if (isNearBottom) {
+             viewerContainer.scrollTop = viewerContainer.scrollHeight;
+          }
+      });
     });
 
     socket.on('role_status_update', data => {
