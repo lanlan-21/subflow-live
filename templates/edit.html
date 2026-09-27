@@ -220,10 +220,11 @@
     const roomId = "{{ room_id }}";
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
-    let myClientId = sessionStorage.getItem('STT_CLIENT_ID');
+    // 🌟 企業級解法 1：改用 localStorage，身分永久綁定，重整網頁也絕對不會生出幽靈分身
+    let myClientId = localStorage.getItem('STT_CLIENT_ID');
     if (!myClientId) {
       myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
-      sessionStorage.setItem('STT_CLIENT_ID', myClientId);
+      localStorage.setItem('STT_CLIENT_ID', myClientId);
     }
 
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
@@ -264,6 +265,11 @@
     let bufferOps = []; 
     let inFlightOp = null; 
 
+    // 🌟 企業級解法 2：優雅離線機制。當使用者關閉網頁時，瞬間通報伺服器，不須苦等 60 秒
+    window.addEventListener('beforeunload', () => {
+        socket.disconnect();
+    });
+
     editorContainer.addEventListener('click', (e) => {
         if (e.target === editorContainer || e.target === endLineMarker) {
             quill.focus();
@@ -298,7 +304,6 @@
 
     function sendNextOp() {
       if (inFlightOp === null && bufferOps.length > 0) {
-        // 動態打包機制：一次把目前累積的所有動作打包送出，徹底消滅排隊延遲
         inFlightOp = bufferOps;
         bufferOps = [];
         socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, ops: inFlightOp });
@@ -360,7 +365,6 @@
       serverVersion = data.version;
       const remoteOps = data.ops || [];
 
-      // 🌟 企業級防護：將所有碎片動作「揉合」成單一 Delta，一次性更新畫面
       let finalRemoteDelta = new Delta();
 
       for (let rOp of remoteOps) {
@@ -393,7 +397,6 @@
         }
       }
       
-      // 在 10 萬字規模下，只呼叫一次 api 確保 O(1) 的超高渲染效能
       if (finalRemoteDelta.length() > 0) {
           quill.updateContents(finalRemoteDelta, 'api');
       }
@@ -415,7 +418,7 @@
     });
 
     socket.on('connect', () => { 
-      inFlightOp = null; bufferOps = []; // 重連清空防死鎖
+      inFlightOp = null; bufferOps = [];
       socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); 
     });
     
@@ -441,6 +444,8 @@
     socket.on('role_status_update', data => {
       const totalEditors = data.total_editors || 1;
       document.getElementById('viewerCountText').innerText = data.total_viewers || 0;
+      
+      // 判斷自己是否為主控
       amIMaster = (data.master_client_id === myClientId);
       currentMasterClientId = data.master_client_id;
 
