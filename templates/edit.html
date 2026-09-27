@@ -7,7 +7,6 @@
   <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   
-  <!-- Quill 企業引擎 -->
   <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
   <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/quill-cursors@3.1.0/dist/quill-cursors.min.js"></script>
@@ -262,9 +261,8 @@
     let currentMasterClientId = null;
     let serverVersion = 0;
     
-    // 🌟 智能自癒引擎核心變數
-    let pendingDelta = new Delta();
-    let inFlightDelta = null;
+    let bufferOps = []; 
+    let inFlightOp = null; 
 
     editorContainer.addEventListener('click', (e) => {
         if (e.target === editorContainer || e.target === endLineMarker) {
@@ -276,15 +274,34 @@
     function requestMasterRole() { socket.emit('claim_master', { room: roomId, client_id: myClientId }); }
     function confirmClearCanvas() {
       if (confirm('警告：將清空所有人的畫布！確定嗎？')) {
-        socket.emit('client_operation', { room: roomId, client_id: myClientId, is_clear: true });
+        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, is_clear: true });
       }
     }
 
-    function sendNextOps() {
-      if (!inFlightDelta && pendingDelta.length() > 0) {
-        inFlightDelta = pendingDelta;
-        pendingDelta = new Delta(); // 重置收集器
-        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, delta: inFlightDelta });
+    function deltaToOps(delta) {
+        let pos = 0;
+        let ops = [];
+        delta.ops.forEach(op => {
+            if (op.retain) {
+                pos += op.retain;
+            } else if (op.insert) {
+                if (typeof op.insert === 'string') {
+                    ops.push({ type: 'insert', pos: pos, text: op.insert });
+                    pos += op.insert.length;
+                }
+            } else if (op.delete) {
+                ops.push({ type: 'delete', pos: pos, len: op.delete });
+            }
+        });
+        return ops;
+    }
+
+    function sendNextOp() {
+      if (inFlightOp === null && bufferOps.length > 0) {
+        // 動態打包機制：一次把目前累積的所有動作打包送出，徹底消滅排隊延遲
+        inFlightOp = bufferOps;
+        bufferOps = [];
+        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, ops: inFlightOp });
       }
     }
 
@@ -297,67 +314,90 @@
       }, 500); 
     }
 
-    // 本地打字：不斷把變更揉合成單一包裹
     quill.on('text-change', (delta, oldDelta, source) => {
       if (source !== 'user') return; 
-      pendingDelta = pendingDelta.compose(delta);
+      const ops = deltaToOps(delta);
+      for (const op of ops) bufferOps.push(op);
+      
       updateWordCountThrottled();
-      sendNextOps();
+      sendNextOp();
     });
 
     quill.on('selection-change', (range, oldRange, source) => {
       if (range) socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: range.index, cursor_length: range.length });
     });
 
-    // 🌟 伺服器驗證與重傳修復
+    socket.on('ack_operation', data => {
+      serverVersion = data.version;
+      inFlightOp = null; 
+      sendNextOp();
+    });
+
+    function transformOp(op1, op2, priority) {
+      if (!op1 || !op2) return op1;
+      const t1 = op1.type, p1 = op1.pos; const t2 = op2.type, p2 = op2.pos;
+      if (t1 === 'insert' && t2 === 'insert') return { type: 'insert', pos: (p1 < p2 || (p1 === p2 && priority === 'left')) ? p1 : p1 + op2.text.length, text: op1.text };
+      else if (t1 === 'insert' && t2 === 'delete') return { type: 'insert', pos: p1 <= p2 ? p1 : (p1 >= p2 + op2.len ? p1 - op2.len : p2), text: op1.text };
+      else if (t1 === 'delete' && t2 === 'insert') return { type: 'delete', pos: p1 + op1.len <= p2 ? p1 : (p1 >= p2 ? p1 + op2.text.length : p1), len: p1 + op1.len <= p2 || p1 >= p2 ? op1.len : op1.len + op2.text.length };
+      else if (t1 === 'delete' && t2 === 'delete') {
+        if (p1 + op1.len <= p2) return { type: 'delete', pos: p1, len: op1.len };
+        if (p1 >= p2 + op2.len) return { type: 'delete', pos: p1 - op2.len, len: op1.len };
+        const newLen = op1.len - (Math.min(p1 + op1.len, p2 + op2.len) - Math.max(p1, p2));
+        return newLen > 0 ? { type: 'delete', pos: Math.min(p1, p2), len: newLen } : null;
+      }
+      return op1;
+    }
+
     socket.on('remote_operation', data => {
-      if (!data) return;
+      if (!data || data.client_id === myClientId) return;
 
       if (data.is_clear) {
         quill.setText('\n', 'api'); serverVersion = data.version;
-        inFlightDelta = null; pendingDelta = new Delta(); wordCount.innerText = '0';
+        inFlightOp = null; bufferOps = []; wordCount.innerText = '0';
         return;
-      }
-
-      // 如果是自己的包裹被確認，解鎖並發送下一包
-      if (data.client_id === myClientId) {
-        serverVersion = data.version;
-        inFlightDelta = null;
-        sendNextOps();
-        return;
-      }
-
-      // 收到別人的包裹：呼叫 Quill 神級矩陣融合運算
-      let remoteDelta = new Delta(data.delta);
-      
-      // 與飛行中的封包進行碰撞轉型
-      if (inFlightDelta) {
-        let priority = myClientId < data.client_id;
-        let transformedRemote = inFlightDelta.transform(remoteDelta, !priority);
-        inFlightDelta = remoteDelta.transform(inFlightDelta, priority);
-        remoteDelta = transformedRemote;
-      }
-
-      // 與尚未發送的按鍵進行碰撞轉型
-      if (pendingDelta.length() > 0) {
-        let priority = myClientId < data.client_id;
-        let transformedRemote = pendingDelta.transform(remoteDelta, !priority);
-        pendingDelta = remoteDelta.transform(pendingDelta, priority);
-        remoteDelta = transformedRemote;
       }
 
       serverVersion = data.version;
+      const remoteOps = data.ops || [];
+
+      // 🌟 企業級防護：將所有碎片動作「揉合」成單一 Delta，一次性更新畫面
+      let finalRemoteDelta = new Delta();
+
+      for (let rOp of remoteOps) {
+        let transformedRemote = rOp;
+        if (inFlightOp) {
+          for (let i = 0; i < inFlightOp.length; i++) {
+            transformedRemote = transformOp(transformedRemote, inFlightOp[i], 'right');
+            inFlightOp[i] = transformOp(inFlightOp[i], rOp, 'left');
+          }
+        }
+        const newBuffer = [];
+        for (let i = 0; i < bufferOps.length; i++) {
+          if (transformedRemote) {
+            const nextBufferOp = transformOp(bufferOps[i], transformedRemote, 'left');
+            transformedRemote = transformOp(transformedRemote, bufferOps[i], 'right');
+            if (nextBufferOp) newBuffer.push(nextBufferOp);
+          } else {
+            newBuffer.push(bufferOps[i]);
+          }
+        }
+        bufferOps = newBuffer;
+
+        if (transformedRemote) {
+          let opDelta = new Delta();
+          if (transformedRemote.pos > 0) opDelta.retain(transformedRemote.pos);
+          if (transformedRemote.type === 'insert') opDelta.insert(transformedRemote.text);
+          else if (transformedRemote.type === 'delete') opDelta.delete(transformedRemote.len);
+          
+          finalRemoteDelta = finalRemoteDelta.compose(opDelta);
+        }
+      }
       
-      if (remoteDelta.length() > 0) {
-          quill.updateContents(remoteDelta, 'api');
+      // 在 10 萬字規模下，只呼叫一次 api 確保 O(1) 的超高渲染效能
+      if (finalRemoteDelta.length() > 0) {
+          quill.updateContents(finalRemoteDelta, 'api');
       }
       updateWordCountThrottled();
-
-      // 🌟 自癒機制：因為我們剛剛收到了別人的廣播，代表我們正在飛行中的封包版本已經過期了！
-      // 我們主動把修正過後 (transform 後) 的新包裹重傳給伺服器，保證絕不卡死不同步。
-      if (inFlightDelta) {
-          socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, delta: inFlightDelta });
-      }
     });
 
     socket.on('cursor_update', data => {
@@ -375,14 +415,13 @@
     });
 
     socket.on('connect', () => { 
-      inFlightDelta = null; pendingDelta = new Delta(); 
+      inFlightOp = null; bufferOps = []; // 重連清空防死鎖
       socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); 
     });
     
     socket.on('init_document', data => {
       if (data && data.text) {
-        // 利用正則表達式去除多餘的空行，還原最原始的畫面
-        quill.setText(data.text.replace(/\n$/, ''), 'api');
+        quill.setText(data.text.replace(/\n$/, '') + '\n', 'api');
       } else {
         quill.setText('\n', 'api');
       }
