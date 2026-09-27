@@ -138,7 +138,6 @@ def handle_join(data):
         else:
             rooms[room_id]["viewers"].add(sid)
 
-        # 🌟 真理伺服器：任何人加入，伺服器瞬間吐出純文字，保證觀眾無需手動刷新
         emit('init_document', {
             "text": rooms[room_id]["text"],
             "version": rooms[room_id]["version"],
@@ -147,7 +146,6 @@ def handle_join(data):
 
     broadcast_roles_status(room_id)
 
-# 🌟 極速動態打包處理中樞
 @socketio.on('client_operation')
 def handle_client_operation(data):
     room_id = data.get('room')
