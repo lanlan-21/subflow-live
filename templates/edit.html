@@ -262,8 +262,9 @@
     let currentMasterClientId = null;
     let serverVersion = 0;
     
-    let pendingOps = []; 
-    let inFlightOps = null; 
+    // 🌟 智能自癒引擎核心變數
+    let pendingDelta = new Delta();
+    let inFlightDelta = null;
 
     editorContainer.addEventListener('click', (e) => {
         if (e.target === editorContainer || e.target === endLineMarker) {
@@ -279,29 +280,11 @@
       }
     }
 
-    function deltaToOps(delta) {
-        let pos = 0;
-        let ops = [];
-        delta.ops.forEach(op => {
-            if (op.retain) {
-                pos += op.retain;
-            } else if (op.insert) {
-                if (typeof op.insert === 'string') {
-                    ops.push({ type: 'insert', pos: pos, text: op.insert });
-                    pos += op.insert.length;
-                }
-            } else if (op.delete) {
-                ops.push({ type: 'delete', pos: pos, len: op.delete });
-            }
-        });
-        return ops;
-    }
-
     function sendNextOps() {
-      if (inFlightOps === null && pendingOps.length > 0) {
-        inFlightOps = pendingOps;
-        pendingOps = [];
-        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, ops: inFlightOps });
+      if (!inFlightDelta && pendingDelta.length() > 0) {
+        inFlightDelta = pendingDelta;
+        pendingDelta = new Delta(); // 重置收集器
+        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, delta: inFlightDelta });
       }
     }
 
@@ -314,11 +297,10 @@
       }, 500); 
     }
 
+    // 本地打字：不斷把變更揉合成單一包裹
     quill.on('text-change', (delta, oldDelta, source) => {
       if (source !== 'user') return; 
-      const ops = deltaToOps(delta);
-      for (const op of ops) pendingOps.push(op);
-      
+      pendingDelta = pendingDelta.compose(delta);
       updateWordCountThrottled();
       sendNextOps();
     });
@@ -327,78 +309,55 @@
       if (range) socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: range.index, cursor_length: range.length });
     });
 
-    socket.on('ack_operation', data => {
-      serverVersion = data.version;
-      inFlightOps = null; 
-      sendNextOps();
-    });
-
-    function transformOp(op1, op2, priority) {
-      if (!op1 || !op2) return op1;
-      const t1 = op1.type, p1 = op1.pos; const t2 = op2.type, p2 = op2.pos;
-      if (t1 === 'insert' && t2 === 'insert') return { type: 'insert', pos: (p1 < p2 || (p1 === p2 && priority === 'left')) ? p1 : p1 + op2.text.length, text: op1.text };
-      else if (t1 === 'insert' && t2 === 'delete') return { type: 'insert', pos: p1 <= p2 ? p1 : (p1 >= p2 + op2.len ? p1 - op2.len : p2), text: op1.text };
-      else if (t1 === 'delete' && t2 === 'insert') return { type: 'delete', pos: p1 + op1.len <= p2 ? p1 : (p1 >= p2 ? p1 + op2.text.length : p1), len: p1 + op1.len <= p2 || p1 >= p2 ? op1.len : op1.len + op2.text.length };
-      else if (t1 === 'delete' && t2 === 'delete') {
-        if (p1 + op1.len <= p2) return { type: 'delete', pos: p1, len: op1.len };
-        if (p1 >= p2 + op2.len) return { type: 'delete', pos: p1 - op2.len, len: op1.len };
-        const newLen = op1.len - (Math.min(p1 + op1.len, p2 + op2.len) - Math.max(p1, p2));
-        return newLen > 0 ? { type: 'delete', pos: Math.min(p1, p2), len: newLen } : null;
-      }
-      return op1;
-    }
-
+    // 🌟 伺服器驗證與重傳修復
     socket.on('remote_operation', data => {
-      if (!data || data.client_id === myClientId) return;
+      if (!data) return;
 
       if (data.is_clear) {
         quill.setText('\n', 'api'); serverVersion = data.version;
-        inFlightOps = null; pendingOps = []; wordCount.innerText = '0';
+        inFlightDelta = null; pendingDelta = new Delta(); wordCount.innerText = '0';
         return;
       }
 
-      serverVersion = data.version;
-      const remoteOps = data.ops || [];
-
-      // 🌟 企業級防護：將所有遠端修改揉合成「單一矩陣」，一次性渲染，消滅殘影與閃爍
-      let finalRemoteDelta = new Delta();
-
-      for (let rOp of remoteOps) {
-        let transformedRemote = rOp;
-        if (inFlightOps) {
-          for (let i = 0; i < inFlightOps.length; i++) {
-            transformedRemote = transformOp(transformedRemote, inFlightOps[i], 'right');
-            inFlightOps[i] = transformOp(inFlightOps[i], rOp, 'left');
-          }
-        }
-        const newPending = [];
-        for (let i = 0; i < pendingOps.length; i++) {
-          if (transformedRemote) {
-            const nextPending = transformOp(pendingOps[i], transformedRemote, 'left');
-            transformedRemote = transformOp(transformedRemote, pendingOps[i], 'right');
-            if (nextPending) newPending.push(nextPending);
-          } else {
-            newPending.push(pendingOps[i]);
-          }
-        }
-        pendingOps = newPending;
-
-        if (transformedRemote) {
-          let opDelta = new Delta();
-          if (transformedRemote.pos > 0) opDelta.retain(transformedRemote.pos);
-          if (transformedRemote.type === 'insert') opDelta.insert(transformedRemote.text);
-          else if (transformedRemote.type === 'delete') opDelta.delete(transformedRemote.len);
-          
-          finalRemoteDelta = finalRemoteDelta.compose(opDelta);
-        }
+      // 如果是自己的包裹被確認，解鎖並發送下一包
+      if (data.client_id === myClientId) {
+        serverVersion = data.version;
+        inFlightDelta = null;
+        sendNextOps();
+        return;
       }
 
-      // 只有在真的有變動時，才呼叫一次底層 API，保證 10 萬字下 O(1) 的極致渲染效能
-      if (finalRemoteDelta.length() > 0) {
-          quill.updateContents(finalRemoteDelta, 'api');
-      }
+      // 收到別人的包裹：呼叫 Quill 神級矩陣融合運算
+      let remoteDelta = new Delta(data.delta);
       
+      // 與飛行中的封包進行碰撞轉型
+      if (inFlightDelta) {
+        let priority = myClientId < data.client_id;
+        let transformedRemote = inFlightDelta.transform(remoteDelta, !priority);
+        inFlightDelta = remoteDelta.transform(inFlightDelta, priority);
+        remoteDelta = transformedRemote;
+      }
+
+      // 與尚未發送的按鍵進行碰撞轉型
+      if (pendingDelta.length() > 0) {
+        let priority = myClientId < data.client_id;
+        let transformedRemote = pendingDelta.transform(remoteDelta, !priority);
+        pendingDelta = remoteDelta.transform(pendingDelta, priority);
+        remoteDelta = transformedRemote;
+      }
+
+      serverVersion = data.version;
+      
+      if (remoteDelta.length() > 0) {
+          quill.updateContents(remoteDelta, 'api');
+      }
       updateWordCountThrottled();
+
+      // 🌟 自癒機制：因為我們剛剛收到了別人的廣播，代表我們正在飛行中的封包版本已經過期了！
+      // 我們主動把修正過後 (transform 後) 的新包裹重傳給伺服器，保證絕不卡死不同步。
+      if (inFlightDelta) {
+          socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, delta: inFlightDelta });
+      }
     });
 
     socket.on('cursor_update', data => {
@@ -416,20 +375,18 @@
     });
 
     socket.on('connect', () => { 
-      inFlightOps = null; pendingOps = []; 
+      inFlightDelta = null; pendingDelta = new Delta(); 
       socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); 
-    });
-
-    socket.on('request_full_document', data => {
-      if (amIMaster) {
-        const fullDelta = quill.getContents();
-        socket.emit('sync_full_document', { room: roomId, target_sid: data.target_sid, delta: fullDelta });
-      }
     });
     
     socket.on('init_document', data => {
-      if (data && data.delta) quill.setContents(data.delta, 'api');
-      else quill.setText('\n', 'api');
+      if (data && data.text) {
+        // 利用正則表達式去除多餘的空行，還原最原始的畫面
+        quill.setText(data.text.replace(/\n$/, ''), 'api');
+      } else {
+        quill.setText('\n', 'api');
+      }
+      serverVersion = data.version || 0;
       updateWordCountThrottled();
       
       if (data.settings && amIMaster) {
@@ -467,6 +424,7 @@
       }
     });
 
+    // --- 工具列與 UI 功能 ---
     function applyLocalStyle() {
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
