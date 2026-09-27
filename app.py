@@ -8,11 +8,11 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'kaohsiung-transcription-secure-key-2026'
 
-# 加入心跳容錯參數，防止會場網路瞬斷導致不同步
+# 心跳檢測防禦網路瞬斷
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=60, ping_interval=25)
 
 rooms = {}
-room_locks = {} # 🌟 企業級房間鎖，消滅並發時空錯亂
+room_locks = {}
 cleanup_timers = {}
 CLEANUP_TIMEOUT_SECONDS = 1800 
 
@@ -36,59 +36,23 @@ def cancel_room_cleanup(room_id):
     if timer:
         timer.cancel()
 
-def transform_primitive(op1, op2, priority):
-    if not op1 or not op2:
-        return op1
-    t1, p1 = op1['type'], op1['pos']
-    t2, p2 = op2['type'], op2['pos']
-
-    if t1 == 'insert' and t2 == 'insert':
-        l2 = len(op2['text'])
-        if p1 < p2 or (p1 == p2 and priority == 'left'):
-            return {'type': 'insert', 'pos': p1, 'text': op1['text']}
-        else:
-            return {'type': 'insert', 'pos': p1 + l2, 'text': op1['text']}
-    elif t1 == 'insert' and t2 == 'delete':
-        l2 = op2['len']
-        if p1 <= p2:
-            return {'type': 'insert', 'pos': p1, 'text': op1['text']}
-        elif p1 >= p2 + l2:
-            return {'type': 'insert', 'pos': p1 - l2, 'text': op1['text']}
-        else:
-            return {'type': 'insert', 'pos': p2, 'text': op1['text']}
-    elif t1 == 'delete' and t2 == 'insert':
-        l1 = op1['len']
-        l2 = len(op2['text'])
-        if p1 + l1 <= p2:
-            return {'type': 'delete', 'pos': p1, 'len': l1}
-        elif p1 >= p2:
-            return {'type': 'delete', 'pos': p1 + l2, 'len': l1}
-        else:
-            return {'type': 'delete', 'pos': p1, 'len': l1 + l2}
-    elif t1 == 'delete' and t2 == 'delete':
-        l1, l2 = op1['len'], op2['len']
-        if p1 + l1 <= p2:
-            return {'type': 'delete', 'pos': p1, 'len': l1}
-        elif p1 >= p2 + l2:
-            return {'type': 'delete', 'pos': p1 - l2, 'len': l1}
-        else:
-            start = max(p1, p2)
-            end = min(p1 + l1, p2 + l2)
-            overlap = end - start
-            if l1 - overlap <= 0: return None
-            return {'type': 'delete', 'pos': min(p1, p2), 'len': l1 - overlap}
-    return op1
-
-def apply_op_to_text(text, op):
-    if not op: return text
-    if op['type'] == 'insert':
-        p = min(max(0, op['pos']), len(text))
-        return text[:p] + op['text'] + text[p:]
-    elif op['type'] == 'delete':
-        p = min(max(0, op['pos']), len(text))
-        l = op['len']
-        return text[:p] + text[p+l:]
-    return text
+# 🌟 神級輕量運算：用最穩定的方式將 Delta 寫入純文字，確保新加入的觀眾瞬間獲得 10 萬字完整內容
+def apply_delta_to_text(text, delta):
+    pos = 0
+    new_text = ""
+    for op in delta.get('ops', []):
+        if 'retain' in op:
+            retain_len = op['retain']
+            new_text += text[pos:pos+retain_len]
+            pos += retain_len
+        elif 'insert' in op:
+            ins = op['insert']
+            if isinstance(ins, str):
+                new_text += ins
+        elif 'delete' in op:
+            pos += op['delete']
+    new_text += text[pos:]
+    return new_text
 
 @app.route('/')
 def index():
@@ -123,10 +87,9 @@ def handle_join(data):
     with room_locks[room_id]:
         if room_id not in rooms:
             rooms[room_id] = {
-                "text": "\n", "version": 0, "history": [],
+                "text": "\n", "version": 0, 
                 "settings": {"theme": "dark", "size": 48, "scale": 100, "pad_x": 8, "pad_y": 10},
-                "master_client_id": None, "editors": {}, "viewers": set(),
-                "cached_delta": None 
+                "master_client_id": None, "editors": {}, "viewers": set()
             }
 
         join_room(room_id)
@@ -135,92 +98,48 @@ def handle_join(data):
             rooms[room_id]["editors"][client_id] = sid
             if rooms[room_id]["master_client_id"] is None:
                 rooms[room_id]["master_client_id"] = client_id
-                emit('init_document', {'delta': None, 'settings': rooms[room_id]["settings"]}, to=sid)
-            else:
-                master_sid = rooms[room_id]["editors"].get(rooms[room_id]["master_client_id"])
-                if master_sid:
-                    emit('request_full_document', {'target_sid': sid}, to=master_sid)
-                else:
-                    emit('init_document', {'delta': rooms[room_id]["cached_delta"], 'settings': rooms[room_id]["settings"]}, to=sid)
         else:
             rooms[room_id]["viewers"].add(sid)
-            master_sid = rooms[room_id]["editors"].get(rooms[room_id]["master_client_id"])
-            if master_sid:
-                emit('request_full_document', {'target_sid': sid}, to=master_sid)
-            else:
-                emit('init_document', {'delta': rooms[room_id]["cached_delta"], 'settings': rooms[room_id]["settings"]}, to=sid)
+
+        # 無論何時加入，伺服器永遠擁有絕對正確的 10 萬字純文字備份
+        emit('init_document', {
+            "text": rooms[room_id]["text"],
+            "version": rooms[room_id]["version"],
+            "settings": rooms[room_id]["settings"]
+        }, to=sid)
 
     broadcast_roles_status(room_id)
 
-@socketio.on('sync_full_document')
-def handle_sync_full_document(data):
-    room_id = data.get('room')
-    target_sid = data.get('target_sid')
-    delta = data.get('delta')
-    if not room_id: return
-    
-    with room_locks.get(room_id, threading.Lock()):
-        if room_id in rooms:
-            rooms[room_id]['cached_delta'] = delta
-            if target_sid:
-                emit('init_document', {'delta': delta, 'settings': rooms[room_id]['settings']}, to=target_sid)
-
+# 🌟 極速郵差：不再做陣列比對，只要版本正確就光速廣播，把碰撞交給終端的 Quill 引擎
 @socketio.on('client_operation')
 def handle_client_operation(data):
     room_id = data.get('room')
-    client_id = data.get('client_id') or request.sid
-    sid = request.sid
+    client_id = data.get('client_id')
+    base_version = data.get('base_version', 0)
+    delta = data.get('delta')
+    
     if not room_id or room_id not in rooms: return
 
-    cancel_room_cleanup(room_id)
-    
-    # 🌟 嚴格鎖定執行緒，保證 10 萬字極限下封包絕對不亂序
     with room_locks.get(room_id, threading.Lock()):
         rdata = rooms[room_id]
-        base_version = data.get('base_version', 0)
-        raw_ops = data.get('ops', [])
-
+        
         if data.get('is_clear'):
             rdata["text"] = "\n"
             rdata["version"] += 1
-            rdata["history"].append({'version': rdata["version"], 'ops': [{'type': 'clear'}]})
-            rdata["cached_delta"] = None
-            emit('remote_operation', {'version': rdata["version"], 'is_clear': True, 'client_id': client_id}, to=room_id, include_self=False)
-            emit('ack_operation', {'version': rdata["version"]}, to=sid)
+            emit('remote_operation', {'version': rdata["version"], 'is_clear': True, 'client_id': client_id}, to=room_id)
             return
 
-        ops = []
-        for op in raw_ops:
-            if op.get('type') == 'insert':
-                op['text'] = op['text'].replace('\r\n', '\n').replace('\r', '\n')
-            ops.append(op)
-
-        transformed_batch = []
-        for op in ops:
-            curr = dict(op)
-            for hist in rdata["history"]:
-                if hist['version'] > base_version:
-                    for hist_op in hist['ops']:
-                        if hist_op.get('type') != 'clear':
-                            curr = transform_primitive(curr, hist_op, priority='right')
-                            if curr is None: break
-                    if curr is None: break
-            if curr:
-                transformed_batch.append(curr)
-                rdata["text"] = apply_op_to_text(rdata["text"], curr)
-
-        if transformed_batch:
+        # 版本吻合，光速放行
+        if base_version == rdata["version"]:
+            rdata["text"] = apply_delta_to_text(rdata["text"], delta)
             rdata["version"] += 1
-            rdata["history"].append({'version': rdata["version"], 'ops': transformed_batch})
-            if len(rdata["history"]) > 600: rdata["history"] = rdata["history"][-600:]
-
-            emit('ack_operation', {'version': rdata["version"]}, to=sid)
+            
             emit('remote_operation', {
-                'version': rdata["version"], 'ops': transformed_batch,
+                'version': rdata["version"],
+                'delta': delta,
                 'client_id': client_id
-            }, to=room_id, include_self=False)
-        else:
-            emit('ack_operation', {'version': rdata["version"]}, to=sid)
+            }, to=room_id)
+        # 如果版本不吻合，伺服器安靜地拋棄。客戶端的「智能自癒引擎」會在收到下一個廣播時自動修復重傳。
 
 @socketio.on('cursor_move')
 def handle_cursor_move(data):
