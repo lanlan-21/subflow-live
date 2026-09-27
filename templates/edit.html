@@ -220,7 +220,6 @@
     const roomId = "{{ room_id }}";
     const audienceUrl = window.location.origin + '/view/' + roomId;
 
-    // 🌟 企業級解法 1：改用 localStorage，身分永久綁定，重整網頁也絕對不會生出幽靈分身
     let myClientId = localStorage.getItem('STT_CLIENT_ID');
     if (!myClientId) {
       myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
@@ -230,14 +229,20 @@
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
     const Delta = Quill.import('delta');
 
+    window.addEventListener('beforeunload', () => {
+        socket.disconnect();
+    });
+
     Quill.register('modules/cursors', QuillCursors);
     const quill = new Quill('#editor', {
       theme: 'snow',
       modules: {
         toolbar: false,
+        // 🌟 效能毒瘤二解法：限制復原歷史數量，防止記憶體在數萬字後膨脹癱瘓
+        history: { delay: 1000, maxStack: 100, userOnly: true },
         cursors: { transformOnTextChange: true, hideDelayMs: 3000, hideSpeedMs: 400 }
       },
-      formats: [] // 鎖死純文字模式
+      formats: [] 
     });
     const cursors = quill.getModule('cursors');
     
@@ -265,9 +270,12 @@
     let bufferOps = []; 
     let inFlightOp = null; 
 
-    // 🌟 企業級解法 2：優雅離線機制。當使用者關閉網頁時，瞬間通報伺服器，不須苦等 60 秒
-    window.addEventListener('beforeunload', () => {
-        socket.disconnect();
+    // 🌟 效能毒瘤一解法：中文輸入法攔截器 (IME Lock)
+    let isComposing = false;
+    quill.root.addEventListener('compositionstart', () => { isComposing = true; });
+    quill.root.addEventListener('compositionend', () => { 
+        isComposing = false; 
+        sendNextOp(); // 選完字後，瞬間解壓縮送出！
     });
 
     editorContainer.addEventListener('click', (e) => {
@@ -310,11 +318,12 @@
       }
     }
 
+    // 🌟 記憶體 0 負擔的字數統計法
     let wordCountTimer = null;
     function updateWordCountThrottled() {
       if (wordCountTimer) return;
       wordCountTimer = setTimeout(() => {
-          wordCount.innerText = quill.getText().replace(/\s/g, '').length;
+          wordCount.innerText = Math.max(0, quill.getLength() - 1);
           wordCountTimer = null;
       }, 500); 
     }
@@ -325,11 +334,24 @@
       for (const op of ops) bufferOps.push(op);
       
       updateWordCountThrottled();
-      sendNextOp();
+      
+      // 🌟 當使用者正在打注音時，只積累、不發送，杜絕網路風暴
+      if (!isComposing) {
+          sendNextOp();
+      }
     });
 
+    // 🌟 杜絕游標廣播風暴，最高限制每秒 20 次
+    let cursorTimer = null;
     quill.on('selection-change', (range, oldRange, source) => {
-      if (range) socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: range.index, cursor_length: range.length });
+      if (range) {
+        if (!cursorTimer) {
+          cursorTimer = setTimeout(() => {
+            socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: range.index, cursor_length: range.length });
+            cursorTimer = null;
+          }, 50); 
+        }
+      }
     });
 
     socket.on('ack_operation', data => {
@@ -404,7 +426,7 @@
     });
 
     socket.on('cursor_update', data => {
-      if (!data || data.client_id === myClientId) return;
+      if (!data || !data.client_id) return;
       const isMaster = (data.client_id === currentMasterClientId);
       const color = isMaster ? '#16a34a' : '#0284c7';
       const name = isMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
@@ -445,7 +467,6 @@
       const totalEditors = data.total_editors || 1;
       document.getElementById('viewerCountText').innerText = data.total_viewers || 0;
       
-      // 判斷自己是否為主控
       amIMaster = (data.master_client_id === myClientId);
       currentMasterClientId = data.master_client_id;
 
@@ -468,7 +489,6 @@
       }
     });
 
-    // --- 工具列與 UI 功能 ---
     function applyLocalStyle() {
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
