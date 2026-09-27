@@ -59,6 +59,18 @@
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity });
     const roomId = "{{ room_id }}";
     const Delta = Quill.import('delta');
+
+    // 🌟 觀眾端同樣套用永久身分證，確保關閉重開時不會產生幽靈人數
+    let myClientId = localStorage.getItem('STT_CLIENT_ID');
+    if (!myClientId) {
+      myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
+      localStorage.setItem('STT_CLIENT_ID', myClientId);
+    }
+
+    // 🌟 優雅離線機制
+    window.addEventListener('beforeunload', () => {
+        socket.disconnect();
+    });
     
     Quill.register('modules/cursors', QuillCursors);
     const quill = new Quill('#editor', { 
@@ -105,10 +117,10 @@
       applyCombinedSettings();
     }
 
-    socket.on('connect', () => { socket.emit('join', { room: roomId, is_editor: false }); });
+    // 附帶自己的 ClientID，讓伺服器能精準清退舊連線
+    socket.on('connect', () => { socket.emit('join', { room: roomId, client_id: myClientId, is_editor: false }); });
 
     socket.on('init_document', data => {
-      // 🌟 真理伺服器：觀眾一連線，瞬間獲得絕對乾淨的 10 萬字純文字，免手動刷新
       if (data && data.text) quill.setText(data.text.replace(/\n$/, '') + '\n', 'api');
       if (data && data.settings) {
           masterSettings = data.settings;
@@ -125,7 +137,6 @@
       if (data.is_clear) { quill.setText('\n', 'api'); return; }
       const ops = data.ops || [];
       
-      // 🌟 企業級防護：在記憶體中將所有碎片動作「揉合」成單一動作，徹底消滅注音殘影與跳動
       let finalDelta = new Delta();
       for (let op of ops) {
         let opDelta = new Delta();
