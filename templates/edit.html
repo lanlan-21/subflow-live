@@ -3,15 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <title>聽打工作台 - 頻道 {{ room_id }}</title>
-  
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  
-  <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
-  <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/quill-cursors@3.1.0/dist/quill-cursors.min.js"></script>
 
-  <style>
+<link href="/static/quill.snow.css" rel="stylesheet">
+<link href="/static/kai.css" rel="stylesheet">
+  <script src="/static/collaboration.js"></script>
+  <script src="/static/qrcode.js"></script>
+<style>
     * { box-sizing: border-box; }
     body[data-theme="dark"] { --bg-main: #0a0a0a; --bg-editor: #121212; --text-color: #ffff33; --caret-color: #ffff33; }
     body[data-theme="green"] { --bg-main: #c7edcc; --bg-editor: #d2edd2; --text-color: #111827; --caret-color: #047857; }
@@ -19,7 +16,7 @@
     body[data-theme="light"] { --bg-main: #f1f5f9; --bg-editor: #ffffff; --text-color: #0f172a; --caret-color: #0f172a; }
 
     body { margin: 0; display: flex; flex-direction: column; height: 100vh; background: var(--bg-main); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; overflow: hidden; transition: background 0.2s ease, color 0.2s ease; }
-    
+
     .toolbar { display: flex; gap: 8px; padding: 8px 16px; background: #1e1e1e; border-bottom: 1px solid #333; align-items: center; flex-wrap: wrap; z-index: 100; transition: transform 0.25s ease; }
     #topHoverTrigger { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 12px; z-index: 150; }
     body.toolbar-hidden #topHoverTrigger { display: block; }
@@ -37,7 +34,7 @@
     .btn-export { background: #d97706; border: none; color: #fff; } .btn-export:hover { background: #b45309; }
     .btn-danger { background: #dc2626; border: none; color: #fff; } .btn-danger:hover { background: #b91c1c; }
     .btn-dark { background: #334155; border: none; color: #fff; } .btn-dark:hover { background: #475569; }
-    
+
     .btn-master-role { font-weight: bold; transition: all 0.2s; }
     .btn-master-role.active { background: #15803d; color: #f0fdf4; border: 1px solid #22c55e; cursor: default; }
     .btn-master-role.inactive { background: #3f3f46; color: #fde047; border: 1px solid #71717a; }
@@ -54,10 +51,10 @@
     .editor-wrapper { flex: 1; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
     .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; cursor: text; }
 
-    .ql-toolbar { display: none !important; } 
+    .ql-toolbar { display: none !important; }
     .ql-container.ql-snow { border: none !important; font-family: inherit; font-size: inherit; height: auto; }
     .ql-editor {
-      padding: 16px 8px 0px 8px; 
+      padding: 16px 8px 0px 8px;
       min-height: auto; overflow-y: visible;
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
       font-size: 48px; line-height: 1.25; color: var(--text-color) !important;
@@ -67,7 +64,7 @@
 
     #endLineMarker {
       display: flex; align-items: center; justify-content: flex-end;
-      height: 22px; margin: 0 8px 60px 8px; 
+      height: 22px; margin: 0 8px 60px 8px;
       border-top: 1px dashed rgba(239, 68, 68, 0.7); pointer-events: none; user-select: none; opacity: 0.9;
     }
     #endLineMarker span { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.5); color: #ef4444; font-size: 11px; font-family: monospace; font-weight: bold; padding: 1px 6px; border-radius: 3px; margin-top: -24px; letter-spacing: 1px; }
@@ -80,7 +77,7 @@
     .online-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; background: #27272a; border: 1px solid #444; border-radius: 12px; font-size: 12px; }
     .online-dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; display: inline-block; box-shadow: 0 0 6px #22c55e; }
     .viewer-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; background: #172554; border: 1px solid #1e40af; border-radius: 12px; font-size: 12px; color: #bfdbfe; }
-    
+
     #aiStreamBar { display: none; padding: 8px 16px; background: #18181b; border-top: 1px solid #3f3f46; color: #e4e4e7; font-size: 14px; align-items: center; gap: 10px; }
     #aiStreamBar.active { display: flex; }
     .ai-indicator { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; display: inline-block; animation: blink 1s infinite; }
@@ -159,6 +156,8 @@
     <button id="masterToggleBtn" class="btn btn-master-role active" onclick="requestMasterRole()">🔒 主投影</button>
     <button class="btn btn-dark" onclick="toggleToolbar(false)">▲ 收起</button>
     <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
+    <button class="btn btn-dark" onclick="changeCollaboratorName()">協作姓名</button>
+    <button class="btn btn-dark" onclick="showRevisions()">版本紀錄</button>
     <button class="btn btn-danger" onclick="confirmClearCanvas()">🗑️ 清空</button>
 
     <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
@@ -182,7 +181,7 @@
       <div id="editor"></div>
       <div id="endLineMarker"><span>--- END ---</span></div>
     </div>
-    
+
     <button class="btn" id="exitFsBtn" onclick="toggleFullscreen()">✕ 退出全螢幕 (ESC)</button>
   </div>
 
@@ -195,7 +194,7 @@
   <div class="statusbar">
     <div class="status-left-box">
       <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
-      <div class="save-alert-badge" onclick="exportTxt()">⚠️ 結束請務必下載檔案</div>
+      <div class="save-alert-badge" onclick="exportTxt()"><span id="syncStatus" role="status" aria-live="polite">正在載入本機備份…</span></div>
     </div>
     <div class="status-right-box">
       <div class="viewer-badge"><span>📺 觀眾：</span><strong id="viewerCountText" style="color: #93c5fd;">0</strong></div>
@@ -216,22 +215,20 @@
     </div>
   </div>
 
+  <div class="qr-modal" id="revisionModal" onclick="this.classList.remove('active')">
+    <div class="qr-card" style="max-width:600px" onclick="event.stopPropagation()">
+      <h3>版本紀錄</h3>
+      <p>有修改時每分鐘保留一版，最近 120 版。下載舊稿不影響夥伴正在編輯的文件。</p>
+      <div id="revisionList" style="max-height:55vh;overflow:auto"></div>
+      <button class="btn btn-blue" onclick="document.getElementById('revisionModal').classList.remove('active')">關閉</button>
+    </div>
+  </div>
   <script>
-    const roomId = "{{ room_id }}";
-    const audienceUrl = window.location.origin + '/view/' + roomId;
+    const roomId = {{ room_id | tojson }};
+    const editToken = {{ edit_token | tojson }};
+    const audienceUrl = window.location.origin + '/view/' + encodeURIComponent(roomId);
 
-    let myClientId = localStorage.getItem('STT_CLIENT_ID');
-    if (!myClientId) {
-      myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
-      localStorage.setItem('STT_CLIENT_ID', myClientId);
-    }
-
-    const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500 });
-    const Delta = Quill.import('delta');
-
-    window.addEventListener('beforeunload', () => {
-        socket.disconnect();
-    });
+    const socket = io({ reconnection: true, reconnectionAttempts: Infinity, reconnectionDelay: 500, autoConnect: false });
 
     Quill.register('modules/cursors', QuillCursors);
     const quill = new Quill('#editor', {
@@ -240,12 +237,12 @@
         toolbar: false,
         // 🌟 效能毒瘤二解法：限制復原歷史數量，防止記憶體在數萬字後膨脹癱瘓
         history: { delay: 1000, maxStack: 100, userOnly: true },
-        cursors: { transformOnTextChange: true, hideDelayMs: 3000, hideSpeedMs: 400 }
+        cursors: { transformOnTextChange: false, hideDelayMs: 10000, hideSpeedMs: 400 }
       },
-      formats: [] 
+      formats: []
     });
     const cursors = quill.getModule('cursors');
-    
+
     const editorContainer = document.getElementById('editorContainer');
     const endLineMarker = document.getElementById('endLineMarker');
     const wordCount = document.getElementById('wordCount');
@@ -255,7 +252,7 @@
     const masterToggleBtn = document.getElementById('masterToggleBtn');
     const modeHintText = document.getElementById('modeHintText');
     const qlEditor = document.querySelector('.ql-editor');
-    
+
     const aiToggleBtn = document.getElementById('aiToggleBtn');
     const aiStreamBar = document.getElementById('aiStreamBar');
     const aiStatusTitle = document.getElementById('aiStatusTitle');
@@ -265,209 +262,67 @@
 
     let amIMaster = true;
     let currentMasterClientId = null;
-    let serverVersion = 0;
-    
-    let bufferOps = []; 
-    let inFlightOp = null; 
-
-    // 🌟 效能毒瘤一解法：中文輸入法攔截器 (IME Lock)
-    let isComposing = false;
-    quill.root.addEventListener('compositionstart', () => { isComposing = true; });
-    quill.root.addEventListener('compositionend', () => { 
-        isComposing = false; 
-        sendNextOp(); // 選完字後，瞬間解壓縮送出！
-    });
-
-    editorContainer.addEventListener('click', (e) => {
-        if (e.target === editorContainer || e.target === endLineMarker) {
-            quill.focus();
-            quill.setSelection(quill.getLength(), 0);
-        }
-    });
-
-    function requestMasterRole() { socket.emit('claim_master', { room: roomId, client_id: myClientId }); }
-    function confirmClearCanvas() {
-      if (confirm('警告：將清空所有人的畫布！確定嗎？')) {
-        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, is_clear: true });
-      }
-    }
-
-    function deltaToOps(delta) {
-        let pos = 0;
-        let ops = [];
-        delta.ops.forEach(op => {
-            if (op.retain) {
-                pos += op.retain;
-            } else if (op.insert) {
-                if (typeof op.insert === 'string') {
-                    ops.push({ type: 'insert', pos: pos, text: op.insert });
-                    pos += op.insert.length;
-                }
-            } else if (op.delete) {
-                ops.push({ type: 'delete', pos: pos, len: op.delete });
-            }
-        });
-        return ops;
-    }
-
-    function sendNextOp() {
-      if (inFlightOp === null && bufferOps.length > 0) {
-        inFlightOp = bufferOps;
-        bufferOps = [];
-        socket.emit('client_operation', { room: roomId, client_id: myClientId, base_version: serverVersion, ops: inFlightOp });
-      }
-    }
-
-    // 🌟 記憶體 0 負擔的字數統計法
-    let wordCountTimer = null;
+    let wordCountTimer;
     function updateWordCountThrottled() {
-      if (wordCountTimer) return;
-      wordCountTimer = setTimeout(() => {
-          wordCount.innerText = Math.max(0, quill.getLength() - 1);
-          wordCountTimer = null;
-      }, 500); 
+      clearTimeout(wordCountTimer);
+      wordCountTimer = setTimeout(() => { wordCount.textContent = Math.max(0, quill.getLength() - 1); }, 200);
     }
-
-    quill.on('text-change', (delta, oldDelta, source) => {
-      if (source !== 'user') return; 
-      const ops = deltaToOps(delta);
-      for (const op of ops) bufferOps.push(op);
-      
-      updateWordCountThrottled();
-      
-      // 🌟 當使用者正在打注音時，只積累、不發送，杜絕網路風暴
-      if (!isComposing) {
-          sendNextOp();
-      }
-    });
-
-    // 🌟 杜絕游標廣播風暴，最高限制每秒 20 次
-    let cursorTimer = null;
-    quill.on('selection-change', (range, oldRange, source) => {
-      if (range) {
-        if (!cursorTimer) {
-          cursorTimer = setTimeout(() => {
-            socket.emit('cursor_move', { room: roomId, client_id: myClientId, cursor_index: range.index, cursor_length: range.length });
-            cursorTimer = null;
-          }, 50); 
-        }
-      }
-    });
-
-    socket.on('ack_operation', data => {
-      serverVersion = data.version;
-      inFlightOp = null; 
-      sendNextOp();
-    });
-
-    function transformOp(op1, op2, priority) {
-      if (!op1 || !op2) return op1;
-      const t1 = op1.type, p1 = op1.pos; const t2 = op2.type, p2 = op2.pos;
-      if (t1 === 'insert' && t2 === 'insert') return { type: 'insert', pos: (p1 < p2 || (p1 === p2 && priority === 'left')) ? p1 : p1 + op2.text.length, text: op1.text };
-      else if (t1 === 'insert' && t2 === 'delete') return { type: 'insert', pos: p1 <= p2 ? p1 : (p1 >= p2 + op2.len ? p1 - op2.len : p2), text: op1.text };
-      else if (t1 === 'delete' && t2 === 'insert') return { type: 'delete', pos: p1 + op1.len <= p2 ? p1 : (p1 >= p2 ? p1 + op2.text.length : p1), len: p1 + op1.len <= p2 || p1 >= p2 ? op1.len : op1.len + op2.text.length };
-      else if (t1 === 'delete' && t2 === 'delete') {
-        if (p1 + op1.len <= p2) return { type: 'delete', pos: p1, len: op1.len };
-        if (p1 >= p2 + op2.len) return { type: 'delete', pos: p1 - op2.len, len: op1.len };
-        const newLen = op1.len - (Math.min(p1 + op1.len, p2 + op2.len) - Math.max(p1, p2));
-        return newLen > 0 ? { type: 'delete', pos: Math.min(p1, p2), len: newLen } : null;
-      }
-      return op1;
-    }
-
-    socket.on('remote_operation', data => {
-      if (!data || data.client_id === myClientId) return;
-
-      if (data.is_clear) {
-        quill.setText('\n', 'api'); serverVersion = data.version;
-        inFlightOp = null; bufferOps = []; wordCount.innerText = '0';
-        return;
-      }
-
-      serverVersion = data.version;
-      const remoteOps = data.ops || [];
-
-      let finalRemoteDelta = new Delta();
-
-      for (let rOp of remoteOps) {
-        let transformedRemote = rOp;
-        if (inFlightOp) {
-          for (let i = 0; i < inFlightOp.length; i++) {
-            transformedRemote = transformOp(transformedRemote, inFlightOp[i], 'right');
-            inFlightOp[i] = transformOp(inFlightOp[i], rOp, 'left');
-          }
-        }
-        const newBuffer = [];
-        for (let i = 0; i < bufferOps.length; i++) {
-          if (transformedRemote) {
-            const nextBufferOp = transformOp(bufferOps[i], transformedRemote, 'left');
-            transformedRemote = transformOp(transformedRemote, bufferOps[i], 'right');
-            if (nextBufferOp) newBuffer.push(nextBufferOp);
-          } else {
-            newBuffer.push(bufferOps[i]);
-          }
-        }
-        bufferOps = newBuffer;
-
-        if (transformedRemote) {
-          let opDelta = new Delta();
-          if (transformedRemote.pos > 0) opDelta.retain(transformedRemote.pos);
-          if (transformedRemote.type === 'insert') opDelta.insert(transformedRemote.text);
-          else if (transformedRemote.type === 'delete') opDelta.delete(transformedRemote.len);
-          
-          finalRemoteDelta = finalRemoteDelta.compose(opDelta);
-        }
-      }
-      
-      if (finalRemoteDelta.length() > 0) {
-          quill.updateContents(finalRemoteDelta, 'api');
-      }
-      updateWordCountThrottled();
-    });
-
-    socket.on('cursor_update', data => {
-      if (!data || !data.client_id) return;
-      const isMaster = (data.client_id === currentMasterClientId);
-      const color = isMaster ? '#16a34a' : '#0284c7';
-      const name = isMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
-      
-      cursors.createCursor(data.client_id, name, color);
-      cursors.moveCursor(data.client_id, { index: data.cursor_index, length: data.cursor_length || 0 });
-    });
-
-    socket.on('cursor_remove', data => {
-      if (data && data.client_id) cursors.removeCursor(data.client_id);
-    });
-
-    socket.on('connect', () => { 
-      inFlightOp = null; bufferOps = [];
-      socket.emit('join', { room: roomId, client_id: myClientId, is_editor: true }); 
-    });
-    
-    socket.on('init_document', data => {
-      if (data && data.text) {
-        quill.setText(data.text.replace(/\n$/, '') + '\n', 'api');
-      } else {
-        quill.setText('\n', 'api');
-      }
-      serverVersion = data.version || 0;
-      updateWordCountThrottled();
-      
-      if (data.settings && amIMaster) {
-        if (data.settings.theme) { document.body.setAttribute('data-theme', data.settings.theme); document.getElementById('themeSelect').value = data.settings.theme; }
-        if (data.settings.size) document.getElementById('fontSizeInput').value = data.settings.size;
-        if (data.settings.scale) scaleInput.value = data.settings.scale;
-        if (data.settings.pad_x) padXInput.value = data.settings.pad_x;
-        if (data.settings.pad_y) document.getElementById('padYInput').value = data.settings.pad_y;
+    const collaboration = createCollaboration({
+      quill, socket, room: roomId, token: editToken,
+      onStatus: message => { document.getElementById('syncStatus').textContent = message; },
+      onSettings: settings => {
+        if (!amIMaster) return;
+        document.body.setAttribute('data-theme', settings.theme);
+        document.getElementById('themeSelect').value = settings.theme;
+        document.getElementById('fontSizeInput').value = settings.size;
+        scaleInput.value = settings.scale;
+        padXInput.value = settings.pad_x;
+        padYInput.value = settings.pad_y;
         applyLocalStyle();
       }
     });
+    quill.on('text-change', updateWordCountThrottled);
+    editorContainer.addEventListener('click', e => {
+      if (e.target === editorContainer || e.target === endLineMarker) {
+        quill.focus();
+        quill.setSelection(quill.getLength() - 1, 0);
+      }
+    });
+    function requestMasterRole() { socket.emit('claim_master'); }
+    async function confirmClearCanvas() {
+      if (!confirm('清空所有人的文件？清空前會保留版本，可從版本紀錄下載。')) return;
+      try { await collaboration.clear(); } catch (error) { alert(error.message); }
+    }
+    function changeCollaboratorName() {
+      const name = prompt('夥伴游標顯示的姓名', localStorage.getItem('subflow-name') || '');
+      if (name) collaboration.setName(name);
+    }
+    async function showRevisions() {
+      try {
+        const versions = await collaboration.revisions();
+        const panel = document.getElementById('revisionList');
+        panel.replaceChildren();
+        if (!versions.length) panel.textContent = '尚無版本；開始輸入後會自動保留。';
+        versions.forEach(version => {
+          const button = document.createElement('button');
+          button.className = 'btn btn-dark';
+          button.style.margin = '4px';
+          button.textContent = new Date(version.created * 1000).toLocaleString() + ' 下載';
+          button.onclick = async () => {
+            try { downloadText(await collaboration.revision(version.id), `頻道${roomId}_版本${version.id}.txt`); }
+            catch (error) { alert(error.message); }
+          };
+          panel.append(button);
+        });
+        document.getElementById('revisionModal').classList.add('active');
+      } catch (error) { alert(error.message); }
+    }
 
     socket.on('role_status_update', data => {
       const totalEditors = data.total_editors || 1;
       document.getElementById('viewerCountText').innerText = data.total_viewers || 0;
-      
-      amIMaster = (data.master_client_id === myClientId);
+
+      amIMaster = (data.master_client_id === socket.id);
       currentMasterClientId = data.master_client_id;
 
       if (totalEditors <= 1) {
@@ -479,6 +334,7 @@
       }
 
       if (amIMaster) {
+          scheduleProjection();
           masterToggleBtn.className = "btn btn-master-role active";
           masterToggleBtn.innerText = totalEditors <= 1 ? "🔒 主投影 (單人)" : "🔒 主投影 (主控中)";
           modeHintText.innerText = "身分：【主投影控制台】";
@@ -489,35 +345,71 @@
       }
     });
 
+    let projectionTimer;
+    function scheduleProjection() {
+      if (!amIMaster || !socket.connected || projectionTimer) return;
+      projectionTimer = setTimeout(() => {
+        projectionTimer = null;
+        if (!amIMaster || !socket.connected) return;
+        const top = editorContainer.getBoundingClientRect().top - document.getElementById('editor').getBoundingClientRect().top;
+        let low = 0, high = Math.max(0, quill.getLength() - 1);
+        while (low < high) {
+          const mid = Math.ceil((low + high) / 2);
+          if (quill.getBounds(mid).top <= top + 1) low = mid;
+          else high = mid - 1;
+        }
+        // Select the beginning of the first visible line, even on narrower phones.
+        const lineTop = quill.getBounds(low).top;
+        high = low; low = 0;
+        while (low < high) {
+          const mid = Math.floor((low + high) / 2);
+          if (quill.getBounds(mid).top < lineTop - 1) low = mid + 1;
+          else high = mid;
+        }
+        socket.emit('projection_scroll', { index: low,
+          bottom: editorContainer.scrollHeight - editorContainer.scrollTop - editorContainer.clientHeight < 40 });
+      }, 100);
+    }
+    editorContainer.addEventListener('scroll', scheduleProjection, { passive: true });
+    quill.on('text-change', scheduleProjection);
+    window.addEventListener('resize', scheduleProjection);
+    document.fonts.ready.then(scheduleProjection);
+
     function applyLocalStyle() {
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       qlEditor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
-      qlEditor.style.padding = `${py} ${px} 0px ${px}`; 
+      qlEditor.style.padding = `${py} ${px} 0px ${px}`;
       qlEditor.style.zoom = scaleVal;
       endLineMarker.style.marginLeft = px;
       endLineMarker.style.marginRight = px;
+      scheduleProjection();
     }
 
-    function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { room: roomId, client_id: myClientId, theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(padYInput.value, 10) }); }
+    function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(padYInput.value, 10) }); }
     function stepScale(delta) { scaleInput.value = Math.min(Math.max((parseInt(scaleInput.value, 10) || 100) + delta, 40), 250); applyAndSync(); }
     function stepPadX(delta) { padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta); applyAndSync(); }
     function stepPadY(delta) { padYInput.value = Math.max(0, (parseInt(padYInput.value, 10) || 0) + delta); applyAndSync(); }
     function stepSize(delta) { const input = document.getElementById('fontSizeInput'); input.value = Math.min(Math.max((parseInt(input.value, 10) || 48) + delta, 12), 140); applyAndSync(); }
-    function changeTheme(themeName) { document.body.setAttribute('data-theme', themeName); }
+    function changeTheme(themeName) { document.body.setAttribute('data-theme', themeName); applyAndSync(); }
     function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
     function toggleFullscreen() { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{}); else document.exitFullscreen(); }
-    
+
     function openAudienceView() { window.open(audienceUrl, '_blank', 'width=1000,height=700'); }
     function copyLink() { navigator.clipboard.writeText(window.location.href); alert('已複製共筆連結'); }
     function toggleExportMenu() { document.getElementById('exportMenu').classList.toggle('show-menu'); }
     window.addEventListener('click', (e) => { if (!e.target.matches('.btn-export')) document.getElementById('exportMenu').classList.remove('show-menu'); });
+    function downloadText(text, filename) {
+      const url = URL.createObjectURL(new Blob(['\uFEFF' + text], { type: 'text/plain;charset=utf-8' }));
+      const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
     function exportTxt() {
       const text = quill.getText().trimEnd();
       if (!text) { alert('目前無內容！'); return; }
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(["\uFEFF" + text], { type: 'text/plain;charset=utf-8' })); a.download = `頻道${roomId}_逐字稿.txt`; a.click();
+      downloadText(text, `頻道${roomId}_逐字稿.txt`);
     }
-    
+
     let qrcodeInstance = null;
     function openQrModal() {
       document.getElementById('qrModal').classList.add('active'); document.getElementById('modalQrUrl').innerText = audienceUrl;
@@ -576,28 +468,21 @@
 
       rec.onstart = () => { aiStatusTitle.innerText = 'AI 辨識中：'; aiIndicator.style.background = '#22c55e'; sessionCommittedText = ''; };
 
-      rec.onresult = (event) => {
-        let fullCurrentStream = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) fullCurrentStream += event.results[i][0].transcript;
-        fullCurrentStream = fullCurrentStream.trim();
-        if (!fullCurrentStream) return;
-
-        let delta = '';
-        if (fullCurrentStream.startsWith(sessionCommittedText)) delta = fullCurrentStream.slice(sessionCommittedText.length);
-        else {
-          let commonLen = 0;
-          while (commonLen < sessionCommittedText.length && commonLen < fullCurrentStream.length && sessionCommittedText[commonLen] === fullCurrentStream[commonLen]) commonLen++;
-          delta = fullCurrentStream.slice(commonLen);
+      rec.onresult = event => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.isFinal) {
+            const value = result[0].transcript.trim();
+            const range = quill.getSelection();
+            const pos = range ? range.index : quill.getLength() - 1;
+            if (value) {
+              quill.insertText(pos, value, 'user');
+              if (range) quill.setSelection(pos + value.length, 0, 'silent');
+            }
+          } else interim += result[0].transcript;
         }
-        
-        if (delta) {
-          const range = quill.getSelection();
-          const pos = range ? range.index : quill.getLength();
-          quill.insertText(pos, delta, 'user');
-          sessionCommittedText = fullCurrentStream;
-        }
-        aiInterimText.innerText = fullCurrentStream;
-        if (event.results[event.resultIndex].isFinal) sessionCommittedText = '';
+        aiInterimText.textContent = interim;
       };
 
       rec.onerror = (e) => { if (e.error === 'not-allowed') { alert('麥克風被拒絕！'); stopAISpeech(); } };
@@ -622,6 +507,7 @@
     }
 
     applyLocalStyle();
+    socket.connect();
   </script>
 </body>
 </html>

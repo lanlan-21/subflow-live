@@ -2,45 +2,47 @@
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>觀眾大螢幕 - 頻道 {{ room_id }}</title>
-  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-  <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
-  <script src="https://cdn.quilljs.com/1.3.6/quill.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/quill-cursors@3.1.0/dist/quill-cursors.min.js"></script>
-  <style>
+<link href="/static/quill.snow.css" rel="stylesheet">
+<link href="/static/kai.css" rel="stylesheet">
+  <script src="/static/collaboration.js"></script>
+<style>
     * { box-sizing: border-box; }
     body {
       margin: 0; background: #0a0a0a; color: #ffff33;
-      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", serif;
-      height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+      font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", serif;
+      height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
       transition: background 0.2s ease, color 0.2s ease;
     }
-    #viewerContainer { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; }
-    
+    #viewerContainer { position: relative; flex: 1; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden; }
+
     .ql-toolbar { display: none !important; }
     .ql-container.ql-snow { border: none !important; font-family: inherit; font-size: inherit; height: auto; }
     .ql-editor {
-      min-height: 50px; padding: 16px 8px 60px 8px; 
+      min-height: 50px; padding: 16px 8px 60px 8px;
       font-family: inherit !important; line-height: 1.25; color: inherit !important;
-      white-space: pre-wrap; word-break: break-all; text-align: justify; overflow-y: visible;
+      white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; text-align: start; overflow-y: visible;
     }
 
-    #viewerControls {
-      position: fixed; bottom: 20px; right: 20px; z-index: 999;
-      background: rgba(30, 41, 59, 0.85); border: 1px solid rgba(71, 85, 105, 0.5);
-      padding: 6px 8px; border-radius: 8px; backdrop-filter: blur(4px);
-      display: flex; gap: 6px; align-items: center;
-      opacity: 0.2; transition: opacity 0.3s ease; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-    }
-    #viewerControls:hover, #viewerControls.active { opacity: 1; }
+    #viewerFooter { flex: none; background: #111827; color: #e2e8f0; border-top: 1px solid #475569;
+      padding: 8px max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+      font: 14px/1.4 system-ui, sans-serif; }
+    #viewerControls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    #viewerMessages { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; font-size: 12px; }
     .btn-viewer {
       background: #334155; color: #f8fafc; border: 1px solid #475569;
-      padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;
+      min-height: 44px; min-width: 44px; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold;
     }
     .btn-viewer:hover { background: #475569; }
+    .btn-viewer:focus-visible { outline: 3px solid #facc15; outline-offset: 2px; }
+    .btn-viewer[aria-pressed="true"] { background: #166534; border-color: #4ade80; }
+    .btn-viewer:disabled { opacity: 0.65; cursor: default; }
     .btn-viewer-reset { background: #0284c7; border-color: #0369a1; }
     .btn-viewer-reset:hover { background: #0369a1; }
-    #localScaleHint { color: #94a3b8; font-size: 12px; margin-left: 4px; font-family: monospace; width: 36px; text-align: right; }
+    [hidden] { display: none !important; }
+    #showViewerToolbar { position: fixed; right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); z-index: 200; opacity: 0.9; }
+    #localScaleHint { color: #e2e8f0; font-size: 12px; margin-left: 4px; min-width: 48px; }
   </style>
 </head>
 <body>
@@ -48,42 +50,45 @@
     <div id="editor">等待聽打員連線...</div>
   </div>
 
-  <div id="viewerControls" onclick="this.classList.add('active'); setTimeout(()=>this.classList.remove('active'), 3000);">
-    <button class="btn-viewer" onclick="stepLocalScale(0.1)" title="放大視角">A+</button>
-    <button class="btn-viewer" onclick="stepLocalScale(-0.1)" title="縮小視角">A-</button>
+  <button id="showViewerToolbar" class="btn-viewer" hidden type="button" aria-controls="viewerFooter">顯示工具列</button>
+  <footer id="viewerFooter" aria-label="觀眾閱讀設定">
+  <div id="viewerControls">
+    <button class="btn-viewer" onclick="stepLocalScale(0.1)" title="放大視角" aria-label="放大文字">A+</button>
+    <button class="btn-viewer" onclick="stepLocalScale(-0.1)" title="縮小視角" aria-label="縮小文字">A-</button>
     <button class="btn-viewer btn-viewer-reset" onclick="resetLocalScale()" title="還原至主控端設定">還原跟隨</button>
+    <button id="followMasterButton" class="btn-viewer" type="button" aria-pressed="true">跟隨主控中</button>
+    <button id="fullscreenButton" class="btn-viewer" type="button">全螢幕</button>
+    <button id="hideViewerToolbar" class="btn-viewer" type="button" aria-controls="viewerFooter">隱藏工具列</button>
     <span id="localScaleHint">x1.0</span>
+    <button id="wakeLockButton" class="btn-viewer" type="button" aria-pressed="false">保持螢幕開啟</button>
   </div>
+  <div id="viewerMessages">
+    <span id="viewerStatus" role="status">連線中…</span>
+    <a href="/static/licenses/moe-kai.txt" target="_blank" rel="noopener" style="color:inherit">楷書：中華民國教育部</a>
+    <span id="wakeLockStatus" role="status">正在設定保持亮屏…</span>
+  </div>
+  </footer>
 
   <script>
-    const socket = io({ reconnection: true, reconnectionAttempts: Infinity });
-    const roomId = "{{ room_id }}";
-    const Delta = Quill.import('delta');
-
-    let myClientId = localStorage.getItem('STT_CLIENT_ID');
-    if (!myClientId) {
-      myClientId = 'user_' + Math.random().toString(36).substring(2, 9);
-      localStorage.setItem('STT_CLIENT_ID', myClientId);
-    }
-
-    window.addEventListener('beforeunload', () => {
-        socket.disconnect();
-    });
-    
+    const socket = io({ reconnection: true, reconnectionAttempts: Infinity, autoConnect: false });
+    const roomId = {{ room_id | tojson }};
     Quill.register('modules/cursors', QuillCursors);
-    const quill = new Quill('#editor', { 
-      theme: 'snow', 
-      readOnly: true, 
-      modules: { toolbar: false, cursors: { transformOnTextChange: true, hideDelayMs: 3000, hideSpeedMs: 400 } },
-      formats: [] 
+    const quill = new Quill('#editor', {
+      theme: 'snow',
+      readOnly: true,
+      modules: { toolbar: false, cursors: { transformOnTextChange: false, hideDelayMs: 3000, hideSpeedMs: 400 } },
+      formats: []
     });
     const cursors = quill.getModule('cursors');
     const qlEditor = document.querySelector('.ql-editor');
     const viewerContainer = document.getElementById('viewerContainer');
-    
+
     let currentMasterClientId = null;
     let masterSettings = { theme: 'dark', size: 48, scale: 100, pad_x: 8, pad_y: 10 };
-    let localViewerScale = parseFloat(localStorage.getItem('STT_LOCAL_SCALE_' + roomId)) || 1.0;
+    function readPreference(key) { try { return localStorage.getItem(key); } catch { return null; } }
+    function savePreference(key, value) { try { localStorage.setItem(key, value); } catch {} }
+    const savedScale = Number(readPreference('STT_LOCAL_SCALE_' + roomId));
+    let localViewerScale = Number.isFinite(savedScale) && savedScale >= 0.5 && savedScale <= 3 ? savedScale : 1;
 
     function applyCombinedSettings() {
       if (masterSettings.theme === 'dark') { document.body.style.background = '#0a0a0a'; document.body.style.color = '#ffff33'; }
@@ -94,85 +99,177 @@
       const masterScaleFactor = (masterSettings.scale || 100) / 100;
       const combinedScale = masterScaleFactor * localViewerScale;
 
-      const px = ((masterSettings.pad_x || 8) * combinedScale) + 'px'; 
+      const px = ((masterSettings.pad_x || 8) * combinedScale) + 'px';
       const py = ((masterSettings.pad_y || 16) * combinedScale) + 'px';
-      const finalFontSize = ((masterSettings.size || 48) * combinedScale) + 'px';
+      // Keep the default readable even if the projection master uses tiny text.
+      const baseFontSize = Math.max(36, (masterSettings.size || 48) * masterScaleFactor);
+      const finalFontSize = (baseFontSize * localViewerScale) + 'px';
 
       qlEditor.style.fontSize = finalFontSize;
-      qlEditor.style.padding = `${py} ${px} 60px ${px}`;
-      document.getElementById('localScaleHint').innerText = 'x' + localViewerScale.toFixed(1);
+      qlEditor.style.padding = `${py} ${px} 24px ${px}`;
+      document.getElementById('localScaleHint').textContent = Math.round(baseFontSize * localViewerScale) + 'px';
+      scheduleFollow();
     }
 
     function stepLocalScale(delta) {
       localViewerScale = Math.max(0.5, Math.min(localViewerScale + delta, 3.0));
-      localStorage.setItem('STT_LOCAL_SCALE_' + roomId, localViewerScale.toFixed(1));
+      savePreference('STT_LOCAL_SCALE_' + roomId, localViewerScale.toFixed(1));
       applyCombinedSettings();
     }
 
     function resetLocalScale() {
       localViewerScale = 1.0;
-      localStorage.setItem('STT_LOCAL_SCALE_' + roomId, '1.0');
+      savePreference('STT_LOCAL_SCALE_' + roomId, '1.0');
+      setFollowing(true);
       applyCombinedSettings();
     }
 
-    socket.on('connect', () => { socket.emit('join', { room: roomId, client_id: myClientId, is_editor: false }); });
-
-    socket.on('init_document', data => {
-      if (data && data.text) quill.setText(data.text.replace(/\n$/, '') + '\n', 'api');
-      if (data && data.settings) {
-          masterSettings = data.settings;
-          applyCombinedSettings();
-      }
-    });
-
-    socket.on('sync_settings', data => { 
-        masterSettings = data; 
-        applyCombinedSettings(); 
-    });
-
-    socket.on('remote_operation', data => {
-      if (data.is_clear) { quill.setText('\n', 'api'); return; }
-      const ops = data.ops || [];
-      
-      let finalDelta = new Delta();
-      for (let op of ops) {
-        let opDelta = new Delta();
-        if (op.pos > 0) opDelta.retain(op.pos);
-        if (op.type === 'insert') opDelta.insert(op.text);
-        else if (op.type === 'delete') opDelta.delete(op.len);
-        
-        finalDelta = finalDelta.compose(opDelta);
-      }
-      
-      if (finalDelta.length() > 0) {
-          quill.updateContents(finalDelta, 'api');
-      }
-      
-      // 🌟 效能革命：將滾動偵測交給硬體 GPU，徹底解放主執行緒
-      requestAnimationFrame(() => {
-          const isNearBottom = viewerContainer.scrollHeight - viewerContainer.scrollTop - viewerContainer.clientHeight < 150;
-          if (isNearBottom) {
-             viewerContainer.scrollTop = viewerContainer.scrollHeight;
-          }
+    let followingMaster = true;
+    let projection = null;
+    let followFrame;
+    function scheduleFollow() {
+      if (!followingMaster || followFrame) return;
+      followFrame = requestAnimationFrame(() => {
+        followFrame = null;
+        if (!followingMaster) return;
+        if (!projection || projection.bottom) viewerContainer.scrollTop = viewerContainer.scrollHeight;
+        else {
+          const index = Math.min(projection.index, Math.max(0, quill.getLength() - 1));
+          const offset = document.getElementById('editor').getBoundingClientRect().top - viewerContainer.getBoundingClientRect().top;
+          viewerContainer.scrollTop += offset + quill.getBounds(index).top;
+        }
       });
+    }
+    function setFollowing(value) {
+      followingMaster = value;
+      const button = document.getElementById('followMasterButton');
+      button.setAttribute('aria-pressed', String(value));
+      button.textContent = value ? '跟隨主控中' : '跟隨主控';
+      if (value) { socket.emit('request_projection'); scheduleFollow(); }
+    }
+    socket.on('projection_scroll', data => { projection = data; scheduleFollow(); });
+    // Only intentional viewer input pauses following; programmatic scrolls do not.
+    viewerContainer.addEventListener('wheel', () => setFollowing(false), { passive: true });
+    viewerContainer.addEventListener('touchmove', () => setFollowing(false), { passive: true });
+    viewerContainer.addEventListener('pointerdown', e => { if (e.pointerType === 'mouse') setFollowing(false); });
+    viewerContainer.tabIndex = 0;
+    viewerContainer.addEventListener('keydown', e => {
+      if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) setFollowing(false);
+    });
+    document.getElementById('followMasterButton').addEventListener('click', () => setFollowing(!followingMaster));
+    window.addEventListener('resize', scheduleFollow);
+    document.fonts.ready.then(scheduleFollow);
+    applyCombinedSettings();
+    const collaboration = createCollaboration({
+      quill, socket, room: roomId, readOnly: true,
+      onSettings: settings => { masterSettings = settings; applyCombinedSettings(); },
+      onStatus: status => { document.getElementById('viewerStatus').textContent = status; if (status.startsWith('已同步')) socket.emit('request_projection'); }
+    });
+    quill.on('text-change', () => {
+      scheduleFollow();
     });
 
-    socket.on('role_status_update', data => {
-      currentMasterClientId = data.master_client_id;
+    const viewerFooter = document.getElementById('viewerFooter');
+    const showToolbarButton = document.getElementById('showViewerToolbar');
+    function showToolbar(show) {
+      viewerFooter.hidden = !show;
+      showToolbarButton.hidden = show;
+      scheduleFollow();
+    }
+    document.getElementById('hideViewerToolbar').addEventListener('click', () => showToolbar(false));
+    showToolbarButton.addEventListener('click', () => showToolbar(true));
+    const fullscreenButton = document.getElementById('fullscreenButton');
+    fullscreenButton.addEventListener('click', async () => {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else if (document.documentElement.requestFullscreen) {
+          await document.documentElement.requestFullscreen();
+          showToolbar(false);
+        } else alert('此瀏覽器不支援全螢幕，可使用「隱藏工具列」放大閱讀區域。');
+      } catch { alert('無法開啟全螢幕，請使用「隱藏工具列」或再試一次。'); }
+    });
+    document.addEventListener('fullscreenchange', () => {
+      fullscreenButton.textContent = document.fullscreenElement ? '離開全螢幕' : '全螢幕';
+      if (!document.fullscreenElement) showToolbar(true);
+      scheduleFollow();
     });
 
-    socket.on('cursor_update', data => {
-      if (!data || !data.client_id) return;
-      const isMaster = (data.client_id === currentMasterClientId);
-      const color = isMaster ? '#16a34a' : '#0284c7';
-      const name = isMaster ? '👑 主聽打員' : '✏️ 協作夥伴';
-      cursors.createCursor(data.client_id, name, color);
-      cursors.moveCursor(data.client_id, { index: data.cursor_index, length: data.cursor_length || 0 });
-    });
+    const wakeButton = document.getElementById('wakeLockButton');
+    const wakeStatus = document.getElementById('wakeLockStatus');
+    const wakeSupported = window.isSecureContext && 'wakeLock' in navigator;
+    let wakeWanted = true;
+    let wakeSentinel = null;
+    let wakeRequestPending = false;
+    let pageActive = true;
 
-    socket.on('cursor_remove', data => {
-      if (data && data.client_id) cursors.removeCursor(data.client_id);
+    function wakeMessage(message) {
+      const active = wakeSentinel !== null && !wakeSentinel.released;
+      wakeButton.setAttribute('aria-pressed', String(active));
+      wakeButton.textContent = active ? '亮屏中・關閉' : wakeWanted ? '保持螢幕開啟／重試' : '保持螢幕開啟';
+      wakeStatus.textContent = message;
+    }
+
+    async function releaseScreen() {
+      const previous = wakeSentinel;
+      wakeSentinel = null;
+      if (previous && !previous.released) {
+        try { await previous.release(); } catch {}
+      }
+    }
+
+    async function requestScreen() {
+      if (!wakeSupported || !wakeWanted || !pageActive || document.visibilityState !== 'visible' || wakeRequestPending) return;
+      if (wakeSentinel && !wakeSentinel.released) return;
+      wakeRequestPending = true;
+      wakeMessage('正在設定保持亮屏…');
+      try {
+        const sentinel = await navigator.wakeLock.request('screen');
+        if (!wakeWanted || !pageActive || document.visibilityState !== 'visible') {
+          await sentinel.release();
+          return;
+        }
+        wakeSentinel = sentinel;
+        sentinel.addEventListener('release', () => {
+          if (wakeSentinel !== sentinel) return;
+          wakeSentinel = null;
+          wakeMessage(wakeWanted ? '保持亮屏已中斷，請點按重試' : '已關閉保持亮屏');
+        });
+        wakeMessage('已保持亮屏，觀看時不會自動熄屏');
+      } catch {
+        wakeMessage('無法保持亮屏，請點按重試；省電設定可能限制此功能');
+      } finally {
+        wakeRequestPending = false;
+      }
+    }
+
+    wakeButton.addEventListener('click', async () => {
+      if (wakeSentinel && !wakeSentinel.released) {
+        wakeWanted = false;
+        savePreference('subflow-keep-screen-on', '0');
+        await releaseScreen();
+        wakeMessage('已關閉保持亮屏');
+      } else {
+        wakeWanted = true;
+        savePreference('subflow-keep-screen-on', '1');
+        await requestScreen();
+      }
     });
+    document.addEventListener('visibilitychange', () => {
+      if (!wakeSupported) return;
+      if (document.visibilityState === 'visible') requestScreen();
+      else {
+        releaseScreen();
+        wakeMessage(wakeWanted ? '暫停亮屏，返回此頁後恢復' : '已關閉保持亮屏');
+      }
+    });
+    window.addEventListener('pagehide', () => { pageActive = false; releaseScreen(); });
+    window.addEventListener('pageshow', () => { pageActive = true; requestScreen(); });
+    if (!wakeSupported) {
+      wakeButton.disabled = true;
+      wakeMessage('瀏覽器不支援保持亮屏，請調整手機的自動鎖定時間');
+    } else if (wakeWanted) requestScreen();
+    else wakeMessage('已關閉保持亮屏');
+    socket.connect();
   </script>
 </body>
 </html>
