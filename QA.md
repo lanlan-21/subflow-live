@@ -36,8 +36,8 @@
 
 ## 驗證邊界
 
-- 測試在本機 Windows、Chrome、Python 3.11 執行；Render 的 Linux/Gunicorn 部署尚未實際驗證。
+- 本機測試在 Windows、Chrome、Python 3.11 執行。2026-10-09 已實際部署 Render Linux／Python 3.13／Gunicorn，健康檢查正常；正式站雙編輯頁、夥伴游標、觀眾頁、重整恢復及兩個獨立 WebSocket 用戶端的合併與離線後讀回均通過。靜態資產與本機測試版本逐位元組一致。
 - 組字測試使用 Chrome DevTools 的 IME 輸入管線及組字事件，未替代聽打員的實體鍵盤、Windows 注音／其他輸入法驗收。
 - 60 秒壓力測試不是整場活動的長時間可靠性保證。正式上線前需要兩位以上聽打員於實際網路及裝置連續測試。
 - Render 免費方案沒有持久磁碟；這次資料庫重啟測試使用同一份仍存在的資料庫，並不代表 Render 免費方案跨重新部署會保留它。
-- 目前未修改 GitHub 遠端、Render 設定或現行網站，也未開通付費資源。
+- 2026-10-09 已上傳 GitHub 分支並部署 Render；未開通付費資源。正式站程式版本為 d2f18aeb830cc07fbd141f7a2cfec517407e2cdc。

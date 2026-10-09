@@ -1,6 +1,6 @@
 # 現有 Render 免費服務上線方式
 
-現行網站為 https://subflow-live.onrender.com/ ，使用 Render 免費方案。已確認首頁正常回應，目前編輯頁仍為原有自製 OT 同步版本，新版 `/healthz` 尚未上線。本次只完成可測試的程式與設定，未修改 Render、建立付費服務或推送 GitHub。
+2026-10-09 已將穩定共筆改造版部署至 https://subflow-live.onrender.com/ ，沿用原本 Render 免費服務。部署分支 codex/collaboration-stability，程式版本 d2f18aeb830cc07fbd141f7a2cfec517407e2cdc。Render 顯示 Deploy succeeded／Live，/healthz 回報 status=ok、durable_storage=false；未建立付費資源。啟動使用單一 Gunicorn worker、32 threads、健康檢查 /healthz，Auto-Deploy 已設為 Off，後續更新須手動部署。未設定 SECRET_KEY 環境變數時，重新部署後舊編輯頁可能需重新整理取得新權杖；本機備份會重新合併。
 
 ## 免費方案可測試的範圍
 

@@ -51,7 +51,7 @@ gunicorn --workers 1 --threads 32 --timeout 120 --bind 0.0.0.0:$PORT app:app
 
 若部署平台的檔案系統會在重啟或部署後清空，必須先掛載持久磁碟，才有跨部署保存的能力。瀏覽器備份不能取代伺服器持久儲存。SQLite 應位於本機持久磁碟，不使用網路共享磁碟；正式使用另安排資料庫備份，可用 SQLite backup API 產生一致快照。
 
-上線替換前，先讓目前使用者匯出舊版逐字稿。舊版只存在程序記憶體的內容無法從 GitHub 還原；這次沒有更動現行網站或推送 GitHub。
+上線替換前，先讓目前使用者匯出舊版逐字稿。舊版只存在程序記憶體的內容無法從 GitHub 還原；2026-10-09 已將改造版上傳至 codex/collaboration-stability 分支並部署至原有 Render 免費服務；main 保留原版。
 
 反向代理需支援 WebSocket，保持同源；Socket.IO 也可退回長輪詢。不要另設開放任意來源的 CORS。
 
