@@ -1,6 +1,4 @@
-Flask>=3.0.0
-Flask-SocketIO>=5.3.6
-python-engineio>=4.9.0
-python-socketio>=5.11.0
-eventlet>=0.35.0
-diff-match-patch>=20230430
+Flask==3.1.2
+Flask-SocketIO==5.5.1
+pycrdt==0.12.36
+gunicorn==23.0.0; platform_system != "Windows"
