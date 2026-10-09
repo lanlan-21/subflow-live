@@ -5,6 +5,7 @@
   <title>聽打工作台 - 頻道 {{ room_id }}</title>
 
 <link href="/static/quill.snow.css" rel="stylesheet">
+<link href="/static/kai.css" rel="stylesheet">
   <script src="/static/collaboration.js"></script>
   <script src="/static/qrcode.js"></script>
 <style>
@@ -333,6 +334,7 @@
       }
 
       if (amIMaster) {
+          scheduleProjection();
           masterToggleBtn.className = "btn btn-master-role active";
           masterToggleBtn.innerText = totalEditors <= 1 ? "🔒 主投影 (單人)" : "🔒 主投影 (主控中)";
           modeHintText.innerText = "身分：【主投影控制台】";
@@ -343,6 +345,36 @@
       }
     });
 
+    let projectionTimer;
+    function scheduleProjection() {
+      if (!amIMaster || !socket.connected || projectionTimer) return;
+      projectionTimer = setTimeout(() => {
+        projectionTimer = null;
+        if (!amIMaster || !socket.connected) return;
+        const top = editorContainer.getBoundingClientRect().top - document.getElementById('editor').getBoundingClientRect().top;
+        let low = 0, high = Math.max(0, quill.getLength() - 1);
+        while (low < high) {
+          const mid = Math.ceil((low + high) / 2);
+          if (quill.getBounds(mid).top <= top + 1) low = mid;
+          else high = mid - 1;
+        }
+        // Select the beginning of the first visible line, even on narrower phones.
+        const lineTop = quill.getBounds(low).top;
+        high = low; low = 0;
+        while (low < high) {
+          const mid = Math.floor((low + high) / 2);
+          if (quill.getBounds(mid).top < lineTop - 1) low = mid + 1;
+          else high = mid;
+        }
+        socket.emit('projection_scroll', { index: low,
+          bottom: editorContainer.scrollHeight - editorContainer.scrollTop - editorContainer.clientHeight < 40 });
+      }, 100);
+    }
+    editorContainer.addEventListener('scroll', scheduleProjection, { passive: true });
+    quill.on('text-change', scheduleProjection);
+    window.addEventListener('resize', scheduleProjection);
+    document.fonts.ready.then(scheduleProjection);
+
     function applyLocalStyle() {
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
@@ -351,6 +383,7 @@
       qlEditor.style.zoom = scaleVal;
       endLineMarker.style.marginLeft = px;
       endLineMarker.style.marginRight = px;
+      scheduleProjection();
     }
 
     function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(padYInput.value, 10) }); }
