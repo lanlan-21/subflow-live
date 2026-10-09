@@ -276,6 +276,29 @@ def handle_settings(data):
         return {'saved': True}
 
 
+@socketio.on('projection_scroll')
+def handle_projection_scroll(data):
+    with lock:
+        m = members.get(request.sid)
+        if not m or not m['editor'] or rooms[m['room']]['master'] != request.sid:
+            return
+        if not isinstance(data, dict) or type(data.get('index')) is not int or not 0 <= data['index'] <= 2**31 - 1:
+            return
+        projection = dict(index=data['index'], bottom=data.get('bottom') is True)
+        rooms[m['room']]['projection'] = projection
+        emit('projection_scroll', projection, to=m['room'], include_self=False)
+
+
+@socketio.on('request_projection')
+def handle_request_projection(_data=None):
+    with lock:
+        m = members.get(request.sid)
+        if m:
+            projection = rooms[m['room']].get('projection')
+            if projection:
+                emit('projection_scroll', projection)
+
+
 @socketio.on('disconnect')
 def handle_disconnect(_reason=None):
     with lock:
