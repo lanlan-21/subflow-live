@@ -48,7 +48,7 @@ try {
   await check('footer and 44px controls fit portrait, landscape and desktop', async () => {
     for (const size of [{width:320,height:568},{width:390,height:844},{width:844,height:390},{width:1280,height:720}]) {
       await page.setViewportSize(size);
-      const metrics = await page.evaluate(() => ({ overflow: document.documentElement.scrollWidth > innerWidth, footer: document.getElementById('viewerFooter').getBoundingClientRect().bottom, editor: document.getElementById('viewerContainer').getBoundingClientRect().bottom, top: document.getElementById('viewerFooter').getBoundingClientRect().top, buttons: [...document.querySelectorAll('.btn-viewer')].map(e => e.getBoundingClientRect().height) }));
+      const metrics = await page.evaluate(() => ({ overflow: document.documentElement.scrollWidth > innerWidth, footer: document.getElementById('viewerFooter').getBoundingClientRect().bottom, editor: document.getElementById('viewerContainer').getBoundingClientRect().bottom, top: document.getElementById('viewerFooter').getBoundingClientRect().top, buttons: [...document.querySelectorAll('.btn-viewer')].filter(e => !e.hidden).map(e => e.getBoundingClientRect().height) }));
       assert(!metrics.overflow, JSON.stringify(size));
       assert(metrics.footer <= size.height + 1);
       assert(metrics.editor <= metrics.top + 1);
@@ -80,11 +80,10 @@ try {
     await page.evaluate(() => { wakeTest.visible = true; document.dispatchEvent(new Event('visibilitychange')); });
     await page.waitForFunction(n => wakeTest.requests > n && document.getElementById('wakeLockButton').getAttribute('aria-pressed') === 'true', before);
   });
-  await check('turning off persists and does not reacquire until explicitly enabled', async () => {
+  await check('turning off works for this session and each new visit defaults to awake', async () => {
     await page.locator('#wakeLockButton').click();
+    assert.equal(await page.locator('#wakeLockButton').getAttribute('aria-pressed'), 'false');
     await page.reload();
-    assert.equal(await page.evaluate(() => wakeTest.requests), 0);
-    await page.locator('#wakeLockButton').click();
     await page.waitForFunction(() => document.getElementById('wakeLockButton').getAttribute('aria-pressed') === 'true');
   });
   await check('system release and rejected request show truthful status and allow retry', async () => {

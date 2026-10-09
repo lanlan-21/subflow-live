@@ -32,6 +32,29 @@ def send(socket, doc):
     return socket.emit('document_update', {'update': server.encode(doc.get_update())}, callback=True)
 
 
+def test_only_current_master_controls_projection_and_room_isolation():
+    master, _ = client(cid=101)
+    partner, _ = client(cid=102)
+    viewer, _ = client(editor=False, cid=103)
+    other, _ = client(editor=False, room='other', cid=104)
+    for c in (master, partner, viewer, other):
+        c.get_received()
+    master.emit('projection_scroll', {'index': 12, 'bottom': False})
+    assert server.rooms['meeting']['projection']['index'] == 12
+    assert any(e['name'] == 'projection_scroll' for e in viewer.get_received())
+    assert not any(e['name'] == 'projection_scroll' for e in other.get_received())
+    for c in (partner, viewer):
+        c.emit('projection_scroll', {'index': 999, 'bottom': True})
+    master.emit('projection_scroll', {'index': 'invalid'})
+    assert server.rooms['meeting']['projection']['index'] == 12
+    viewer.emit('request_projection')
+    assert viewer.get_received()[-1]['args'][0]['index'] == 12
+    partner.emit('claim_master')
+    master.emit('projection_scroll', {'index': 13})
+    partner.emit('projection_scroll', {'index': 20})
+    assert server.rooms['meeting']['projection']['index'] == 20
+
+
 def test_concurrent_edits_and_duplicate_delivery():
     a, init = client(cid=1)
     b, _ = client(cid=2)
