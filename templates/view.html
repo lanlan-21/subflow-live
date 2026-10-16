@@ -3,13 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="聽打觀眾">
+  <meta name="theme-color" content="#0a0a0a">
   <title>觀眾大螢幕 - 頻道 {{ room_id }}</title>
 <link href="/static/quill.snow.css" rel="stylesheet">
 <link href="/static/kai.css" rel="stylesheet">
   <script src="/static/collaboration.js"></script>
 <style>
     * { box-sizing: border-box; }
+    :root {
+      --safe-top: env(safe-area-inset-top, 0px);
+      --safe-right: env(safe-area-inset-right, 0px);
+      --safe-bottom: env(safe-area-inset-bottom, 0px);
+      --safe-left: env(safe-area-inset-left, 0px);
+    }
     body {
+      padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
       margin: 0; background: #0a0a0a; color: #ffff33;
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", serif;
       height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
@@ -26,10 +38,11 @@
     }
 
     #viewerFooter { flex: none; background: #111827; color: #e2e8f0; border-top: 1px solid #475569;
-      padding: 8px max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+      padding: 8px;
       font: 14px/1.4 system-ui, sans-serif; }
     #viewerControls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     #viewerMessages { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 6px; font-size: 12px; }
+    #wakeLockStatus[data-active="true"] { color: #86efac; }
     .btn-viewer {
       background: #334155; color: #f8fafc; border: 1px solid #475569;
       min-height: 44px; min-width: 44px; padding: 8px 10px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold;
@@ -41,7 +54,12 @@
     .btn-viewer-reset { background: #0284c7; border-color: #0369a1; }
     .btn-viewer-reset:hover { background: #0369a1; }
     [hidden] { display: none !important; }
-    #showViewerToolbar { position: fixed; right: max(8px, env(safe-area-inset-right)); bottom: max(8px, env(safe-area-inset-bottom)); z-index: 200; opacity: 0.9; }
+    #showViewerToolbar { position: fixed; right: calc(8px + var(--safe-right)); bottom: calc(8px + var(--safe-bottom)); z-index: 200; opacity: 0.9; }
+    #mobileViewingHelp { color: #f8fafc; background: #111827; border: 1px solid #64748b; border-radius: 12px; padding: 20px;
+      width: 440px; max-width: calc(100vw - 32px - var(--safe-left) - var(--safe-right));
+      max-height: calc(100dvh - 32px - var(--safe-top) - var(--safe-bottom)); overflow-y: auto; font: 16px/1.6 system-ui, sans-serif; }
+    #mobileViewingHelp::backdrop { background: #000b; }
+    #mobileViewingHelp h2 { margin-top: 0; font-size: 20px; }
     #localScaleHint { color: #e2e8f0; font-size: 12px; margin-left: 4px; min-width: 48px; }
   </style>
 </head>
@@ -60,7 +78,6 @@
     <button id="fullscreenButton" class="btn-viewer" type="button">全螢幕</button>
     <button id="hideViewerToolbar" class="btn-viewer" type="button" aria-controls="viewerFooter">隱藏工具列</button>
     <span id="localScaleHint">x1.0</span>
-    <button id="wakeLockButton" class="btn-viewer" type="button" aria-pressed="false">保持螢幕開啟</button>
   </div>
   <div id="viewerMessages">
     <span id="viewerStatus" role="status">連線中…</span>
@@ -69,6 +86,14 @@
   </div>
   </footer>
 
+  <dialog id="mobileViewingHelp" aria-labelledby="mobileViewingTitle">
+    <h2 id="mobileViewingTitle">手機大畫面觀看</h2>
+    <p>iPhone 若無法直接全螢幕，可將這個觀眾頁加入主畫面，以獨立網頁 App 開啟，減少瀏覽器工具列占用。</p>
+    <ol><li>使用 Safari 開啟目前的觀眾連結。</li><li>按「分享」→「加入主畫面」。若有「作為網頁 App 開啟」，請保持開啟。</li><li>從主畫面的圖示進入，再橫放手機觀看。</li></ol>
+    <p>臨時觀看也可按「展開閱讀」隱藏本站工具列；右下角「顯示工具列」可找回操作。</p>
+    <button id="expandReadingButton" class="btn-viewer" type="button">展開閱讀</button>
+    <button id="closeMobileHelp" class="btn-viewer" type="button">關閉說明</button>
+  </dialog>
   <script>
     const socket = io({ reconnection: true, reconnectionAttempts: Infinity, autoConnect: false });
     const roomId = {{ room_id | tojson }};
@@ -179,33 +204,39 @@
     document.getElementById('hideViewerToolbar').addEventListener('click', () => showToolbar(false));
     showToolbarButton.addEventListener('click', () => showToolbar(true));
     const fullscreenButton = document.getElementById('fullscreenButton');
+    const mobileHelp = document.getElementById('mobileViewingHelp');
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    const nativeFullscreen = document.fullscreenEnabled && typeof document.documentElement.requestFullscreen === 'function';
+    if (standalone) fullscreenButton.textContent = '展開閱讀';
+    else if (!nativeFullscreen) fullscreenButton.textContent = '手機大畫面';
+    document.getElementById('closeMobileHelp').addEventListener('click', () => mobileHelp.close());
+    document.getElementById('expandReadingButton').addEventListener('click', () => { mobileHelp.close(); showToolbar(false); });
     fullscreenButton.addEventListener('click', async () => {
+      if (standalone) { showToolbar(false); return; }
+      if (!nativeFullscreen) { mobileHelp.showModal(); return; }
       try {
         if (document.fullscreenElement) await document.exitFullscreen();
         else if (document.documentElement.requestFullscreen) {
           await document.documentElement.requestFullscreen();
           showToolbar(false);
-        } else alert('此瀏覽器不支援全螢幕，可使用「隱藏工具列」放大閱讀區域。');
-      } catch { alert('無法開啟全螢幕，請使用「隱藏工具列」或再試一次。'); }
+        } else mobileHelp.showModal();
+      } catch { mobileHelp.showModal(); }
     });
     document.addEventListener('fullscreenchange', () => {
-      fullscreenButton.textContent = document.fullscreenElement ? '離開全螢幕' : '全螢幕';
+      fullscreenButton.textContent = document.fullscreenElement ? '離開全螢幕' : standalone ? '展開閱讀' : nativeFullscreen ? '全螢幕' : '手機大畫面';
       if (!document.fullscreenElement) showToolbar(true);
       scheduleFollow();
     });
 
-    const wakeButton = document.getElementById('wakeLockButton');
     const wakeStatus = document.getElementById('wakeLockStatus');
     const wakeSupported = window.isSecureContext && 'wakeLock' in navigator;
-    let wakeWanted = true;
     let wakeSentinel = null;
     let wakeRequestPending = false;
     let pageActive = true;
 
     function wakeMessage(message) {
       const active = wakeSentinel !== null && !wakeSentinel.released;
-      wakeButton.setAttribute('aria-pressed', String(active));
-      wakeButton.textContent = active ? '亮屏中・關閉' : wakeWanted ? '保持螢幕開啟／重試' : '保持螢幕開啟';
+      wakeStatus.dataset.active = String(active);
       wakeStatus.textContent = message;
     }
 
@@ -218,57 +249,57 @@
     }
 
     async function requestScreen() {
-      if (!wakeSupported || !wakeWanted || !pageActive || document.visibilityState !== 'visible' || wakeRequestPending) return;
+      if (!wakeSupported || !pageActive || document.visibilityState !== 'visible' || wakeRequestPending) return;
       if (wakeSentinel && !wakeSentinel.released) return;
       wakeRequestPending = true;
+      let retryAfterReturn = false;
       wakeMessage('正在設定保持亮屏…');
       try {
         const sentinel = await navigator.wakeLock.request('screen');
-        if (!wakeWanted || !pageActive || document.visibilityState !== 'visible') {
+        if (!pageActive || document.visibilityState !== 'visible') {
           await sentinel.release();
+          retryAfterReturn = true;
           return;
         }
         wakeSentinel = sentinel;
         sentinel.addEventListener('release', () => {
           if (wakeSentinel !== sentinel) return;
           wakeSentinel = null;
-          wakeMessage(wakeWanted ? '保持亮屏已中斷，請點按重試' : '已關閉保持亮屏');
+          wakeMessage('保持亮屏已中斷，系統可能限制；返回頁面或輕觸畫面將自動重試');
+          clearTimeout(wakeRetryTimer);
+          wakeRetryTimer = setTimeout(requestScreen, 1500);
         });
-        wakeMessage('已保持亮屏，觀看時不會自動熄屏');
+        wakeMessage('亮屏中・已自動啟用');
       } catch {
-        wakeMessage('無法保持亮屏，請點按重試；省電設定可能限制此功能');
+        wakeMessage('系統未允許保持亮屏；請關閉省電模式，輕觸畫面將自動重試');
       } finally {
         wakeRequestPending = false;
+        if (retryAfterReturn && pageActive && document.visibilityState === 'visible') requestScreen();
       }
     }
 
-    wakeButton.addEventListener('click', async () => {
-      if (wakeSentinel && !wakeSentinel.released) {
-        wakeWanted = false;
-        savePreference('subflow-keep-screen-on', '0');
-        await releaseScreen();
-        wakeMessage('已關閉保持亮屏');
-      } else {
-        wakeWanted = true;
-        savePreference('subflow-keep-screen-on', '1');
-        await requestScreen();
-      }
-    });
+    let wakeRetryTimer;
+    let lastWakeAttempt = 0;
+    // Retry after natural user interaction without exposing an on/off setting.
+    document.addEventListener('pointerup', () => {
+      if (Date.now() - lastWakeAttempt < 2000) return;
+      lastWakeAttempt = Date.now();
+      requestScreen();
+    }, { passive: true });
     document.addEventListener('visibilitychange', () => {
       if (!wakeSupported) return;
       if (document.visibilityState === 'visible') requestScreen();
       else {
         releaseScreen();
-        wakeMessage(wakeWanted ? '暫停亮屏，返回此頁後恢復' : '已關閉保持亮屏');
+        clearTimeout(wakeRetryTimer);
+        wakeMessage('暫停亮屏，返回此頁後自動恢復');
       }
     });
-    window.addEventListener('pagehide', () => { pageActive = false; releaseScreen(); });
+    window.addEventListener('pagehide', () => { pageActive = false; clearTimeout(wakeRetryTimer); releaseScreen(); });
     window.addEventListener('pageshow', () => { pageActive = true; requestScreen(); });
     if (!wakeSupported) {
-      wakeButton.disabled = true;
       wakeMessage('瀏覽器不支援保持亮屏，請調整手機的自動鎖定時間');
-    } else if (wakeWanted) requestScreen();
-    else wakeMessage('已關閉保持亮屏');
+    } else requestScreen();
     socket.connect();
   </script>
 </body>
