@@ -71,3 +71,11 @@
 驗證：12 項觀眾頁測試、7 項投影回歸測試通過。安全區以左右各 59px、底部 21px 模擬測試；亮屏使用可控制的 mock 驗證生命週期；不支援全螢幕與 standalone 情境亦使用測試環境模擬。iPhone 實際動態島、Safari 主畫面開啟及硬體熄屏仍須使用者實機驗收。
 
 參考：WebKit https://webkit.org/blog/7929/designing-websites-for-iphone-x/ ；Apple https://support.apple.com/en-lamr/guide/iphone/iphea86e5236/ios 。
+
+## 2026-10-17 工作區組字預覽
+
+使用 compositionupdate 的 data，透過 Yjs awareness 傳送短暫組字預覽，在夥伴游標旁顯示姓名、注音／組字內容。預覽是 Quill 文字區外的 overlay，不進入文件、版本或 undo；觀眾端不顯示預覽。以 Yjs relative position 跟隨文字位置，夥伴在前方補字時預覽也會移動。選字、取消、失焦或斷線後移除，保留原有組字期間暫緩遠端文件修改的保護。
+
+19 項共筆瀏覽器測試通過，含 Chrome 原生 IME 輸入管線（CDP）：ㄓㄨㄥ→ㄓㄨㄥˋ 即時預覽、提交後移除、取消不改稿、多位夥伴同時組字、前方補字位置追蹤、斷線清理、HTML 當純文字顯示；原有中文組字、undo、斷線補送與五人延遲網路測試皆通過。
+
+限制：這是瀏覽器取得的組字內容，並非系統輸入法候選視窗擷取。有些輸入法提供原始注音，有些僅提供轉換中的中文字。尚未透過使用者實際 Windows 注音輸入法驗收；不能保證所有輸入法都暴露逐鍵注音。

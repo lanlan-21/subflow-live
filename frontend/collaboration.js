@@ -24,6 +24,8 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   const awareness = new Awareness(doc);
   const network = Symbol('network');
   let composing = false;
+  let compositionGeneration = 0;
+  let compositionAnchor = null;
   let remoteQueue = [];
   let joined = false;
   let pending = [];
@@ -72,16 +74,33 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     else Y.applyUpdate(doc, update, network);
   }
 
+  function publishComposition(value) {
+    if (readOnly || !composing || !compositionAnchor) return;
+    awareness.setLocalStateField('compositionPreview', {
+      anchor: compositionAnchor, text: typeof value === 'string' ? value.slice(0, 160) : ''
+    });
+  }
   quill.root.addEventListener('compositionstart', () => {
+    if (readOnly) return;
+    compositionGeneration++;
     composing = true;
+    const range = quill.getSelection();
+    compositionAnchor = Y.createRelativePositionFromTypeIndex(text, Math.min(range?.index ?? text.length, text.length));
     undo.stopCapturing();
     awareness.setLocalStateField('composing', true);
+    publishComposition('');
   });
+  quill.root.addEventListener('compositionupdate', event => publishComposition(event.data));
   quill.root.addEventListener('compositionend', () => {
+    if (readOnly) return;
+    const currentComposition = compositionGeneration;
+    awareness.setLocalStateField('compositionPreview', null);
     // Quill commits the final IME mutation before remote changes are applied.
     setTimeout(() => {
+      if (currentComposition !== compositionGeneration) return;
       quill.update('user');
       composing = false;
+      compositionAnchor = null;
       const queue = remoteQueue;
       remoteQueue = [];
       doc.transact(() => queue.forEach(update => Y.applyUpdate(doc, update, network)), network);
@@ -90,6 +109,55 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       schedule();
     }, 0);
   });
+  quill.root.addEventListener('blur', () => {
+    if (!readOnly) awareness.setLocalStateField('compositionPreview', null);
+  });
+
+  // A separate overlay never inserts preedit text into Quill, Yjs or history.
+  const previewNodes = new Map();
+  if (!readOnly) {
+    const style = document.createElement('style');
+    style.textContent = '.remote-ime-preview{position:absolute;z-index:60;pointer-events:none;max-width:min(320px,90%);padding:5px 8px;border:2px solid;border-radius:6px;background:#111827;color:#f8fafc;font:16px/1.4 system-ui,sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 2px 8px #0008}';
+    document.head.append(style);
+  }
+  let previewFrame;
+  function renderCompositionPreviews() {
+    if (readOnly || previewFrame) return;
+    previewFrame = requestAnimationFrame(() => {
+      previewFrame = null;
+      const active = new Set();
+      awareness.getStates().forEach((state, id) => {
+        if (id === doc.clientID || !state.composing || !state.compositionPreview) return;
+        try {
+          const preview = state.compositionPreview;
+          const anchor = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(preview.anchor), doc);
+          if (!anchor || anchor.type !== text) return;
+          active.add(id);
+          let node = previewNodes.get(id);
+          if (!node) {
+            node = document.createElement('div');
+            node.className = 'remote-ime-preview';
+            node.dataset.clientId = String(id);
+            quill.container.append(node);
+            previewNodes.set(id, node);
+          }
+          const name = String(state.user?.name || '夥伴').slice(0, 40);
+          const draft = typeof preview.text === 'string' ? preview.text.slice(0, 160) : '';
+          node.textContent = `${name}：${draft || '正在組字…'}${draft ? '（組字中）' : ''}`;
+          node.style.borderColor = /^#[0-9a-f]{6}$/i.test(state.user?.color) ? state.user.color : '#38bdf8';
+          const bounds = quill.getBounds(Math.min(anchor.index, quill.getLength() - 1));
+          node.style.top = `${bounds.bottom + 4}px`;
+          node.style.left = `${Math.max(0, Math.min(bounds.left, quill.container.clientWidth - node.offsetWidth))}px`;
+        } catch { /* A deleted or malformed anchor has no safe preview position. */ }
+      });
+      for (const [id, node] of previewNodes) {
+        if (!active.has(id)) { node.remove(); previewNodes.delete(id); }
+      }
+    });
+  }
+  awareness.on('change', renderCompositionPreviews);
+  quill.on('editor-change', renderCompositionPreviews);
+  window.addEventListener('resize', renderCompositionPreviews);
 
   function applyPresence(peer) {
     const writer = encoding.createEncoder();

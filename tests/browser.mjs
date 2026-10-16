@@ -122,6 +122,13 @@ try {
     await a.evaluate(() => { quill.focus(); quill.setSelection(quill.getLength() - 1, 0); });
     const input = await browser.newCDPSession(a);
     await input.send('Input.imeSetComposition', { text: 'ㄓㄨㄥ', selectionStart: 3, selectionEnd: 3 });
+    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄓㄨㄥ'));
+    assert(!(await content(b)).includes('ㄓㄨㄥ'));
+    assert(!(await content(viewer)).includes('ㄓㄨㄥ'));
+    assert.equal(await viewer.locator('.remote-ime-preview').count(), 0);
+    assert.equal(await a.locator('.remote-ime-preview').count(), 0);
+    await input.send('Input.imeSetComposition', { text: 'ㄓㄨㄥˋ', selectionStart: 4, selectionEnd: 4 });
+    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄓㄨㄥˋ'));
     await b.evaluate(() => quill.insertText(0, '選字時校正', 'user'));
     await delay(250);
     assert(!(await content(a)).includes('選字時校正'));
@@ -129,7 +136,45 @@ try {
     const value = await synced(pages);
     assert(value.includes('正式中文') && value.includes('選字時校正'));
     assert(!value.includes('ㄓㄨㄥ'));
+    await b.waitForFunction(() => !document.querySelector('.remote-ime-preview'));
     await input.detach();
+  });
+  await check('cancelled native IME removes partner preview without changing draft', async () => {
+    await a.bringToFront();
+    await a.evaluate(() => { quill.focus(); quill.setSelection(quill.getLength() - 1, 0); });
+    const before = await content(b);
+    const input = await browser.newCDPSession(a);
+    await input.send('Input.imeSetComposition', { text: 'ㄅㄆㄇ', selectionStart: 3, selectionEnd: 3 });
+    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄅㄆㄇ'));
+    await input.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 });
+    await b.waitForFunction(() => !document.querySelector('.remote-ime-preview'));
+    await synced(pages);
+    assert.equal(await content(b), before);
+    await input.detach();
+  });
+  await check('multiple IME previews are text-only, track partner edits and clear on disconnect', async () => {
+    await a.evaluate(() => {
+      quill.focus(); quill.setSelection(3, 0);
+      quill.root.dispatchEvent(new CompositionEvent('compositionstart'));
+      quill.root.dispatchEvent(new CompositionEvent('compositionupdate', {data:'<img src=x onerror=alert(1)>ㄓ'}));
+    });
+    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('<img'));
+    assert.equal(await b.locator('.remote-ime-preview img').count(), 0);
+    await c.evaluate(() => {
+      quill.focus(); quill.setSelection(5, 0);
+      quill.root.dispatchEvent(new CompositionEvent('compositionstart'));
+      quill.root.dispatchEvent(new CompositionEvent('compositionupdate', {data:'ㄅㄆ'}));
+    });
+    await b.waitForFunction(() => document.querySelectorAll('.remote-ime-preview').length === 2);
+    const before = await b.locator('.remote-ime-preview').first().evaluate(el => el.style.left);
+    await b.evaluate(() => quill.insertText(0, '前補', 'user'));
+    await b.waitForFunction(before => document.querySelector('.remote-ime-preview').style.left !== before, before);
+    await a.evaluate(() => socket.disconnect());
+    await b.waitForFunction(() => document.querySelectorAll('.remote-ime-preview').length === 1);
+    await a.evaluate(() => { quill.root.dispatchEvent(new CompositionEvent('compositionend')); socket.connect(); });
+    await c.evaluate(() => quill.root.dispatchEvent(new CompositionEvent('compositionend')));
+    await b.waitForFunction(() => !document.querySelector('.remote-ime-preview'));
+    await synced(pages);
   });
   await check('real keyboard insertion and deletion sync to partners', async () => {
     await a.bringToFront();
