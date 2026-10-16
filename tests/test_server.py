@@ -173,6 +173,15 @@ def test_free_tier_storage_limit_is_disclosed(monkeypatch):
     assert response.json['durable_storage'] is False
 
 
+def test_editor_viewer_and_handshake_share_asset_version():
+    _, result = client()
+    http = server.app.test_client()
+    assert result['asset_version'] == server.ASSET_VERSION
+    assert http.get('/healthz').json['asset_version'] == server.ASSET_VERSION
+    for route in ('/edit/meeting', '/view/meeting'):
+        assert f'/static/collaboration.js?v={server.ASSET_VERSION}' in http.get(route).text
+
+
 def test_storage_health_check_detects_unavailable_database(monkeypatch):
     def fail():
         raise OSError('Unavailable storage')

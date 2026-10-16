@@ -152,6 +152,26 @@ try {
     assert.equal(await content(b), before);
     await input.detach();
   });
+  await check('continuous rapid composition updates cannot starve partner preview', async () => {
+    await a.evaluate(() => {
+      quill.focus(); quill.setSelection(quill.getLength() - 1, 0);
+      quill.root.dispatchEvent(new CompositionEvent('compositionstart'));
+      let count = 0;
+      window.fastCompositionTimer = setInterval(() => {
+        quill.root.dispatchEvent(new CompositionEvent('compositionupdate', {data: `ㄓㄨㄥ${++count}`}));
+      }, 5);
+    });
+    try {
+      await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄓㄨㄥ'), null, {timeout: 1500, polling: 20});
+    } finally {
+      await a.evaluate(() => {
+        clearInterval(window.fastCompositionTimer);
+        quill.root.dispatchEvent(new CompositionEvent('compositionend'));
+      });
+    }
+    await b.waitForFunction(() => !document.querySelector('.remote-ime-preview'));
+    await synced(pages);
+  });
   await check('multiple IME previews are text-only, track partner edits and clear on disconnect', async () => {
     await a.evaluate(() => {
       quill.focus(); quill.setSelection(3, 0);
@@ -175,6 +195,36 @@ try {
     await c.evaluate(() => quill.root.dispatchEvent(new CompositionEvent('compositionend')));
     await b.waitForFunction(() => !document.querySelector('.remote-ime-preview'));
     await synced(pages);
+  });
+  await check('native IME preview survives missing compositionupdate and null input data', async () => {
+    for (const domFallback of [false, true]) {
+      await a.bringToFront();
+      await a.evaluate(domFallback => {
+        quill.focus(); quill.setSelection(quill.getLength() - 1, 0);
+        window.suppressComposition = event => event.stopImmediatePropagation();
+        window.nullCompositionInput = event => { if (event.isComposing) Object.defineProperty(event, 'data', {value: null}); };
+        quill.root.addEventListener('compositionupdate', window.suppressComposition, true);
+        if (domFallback) {
+          quill.root.addEventListener('beforeinput', window.suppressComposition, true);
+          quill.root.addEventListener('input', window.nullCompositionInput, true);
+        }
+      }, domFallback);
+      const input = await browser.newCDPSession(a);
+      await input.send('Input.imeSetComposition', {text:'ㄅㄆㄇ',selectionStart:3,selectionEnd:3});
+      await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄅㄆㄇ'));
+      const source = await a.locator('#imePreviewStatus').getAttribute('data-source');
+      assert.equal(source, domFallback ? 'input-dom' : 'input');
+      assert(!(await content(b)).includes('ㄅㄆㄇ'));
+      await input.send('Input.imeSetComposition', {text:'',selectionStart:0,selectionEnd:0});
+      await a.evaluate(() => {
+        quill.root.removeEventListener('compositionupdate', window.suppressComposition, true);
+        quill.root.removeEventListener('beforeinput', window.suppressComposition, true);
+        quill.root.removeEventListener('input', window.nullCompositionInput, true);
+      });
+      await b.waitForFunction(() => !document.querySelector('.remote-ime-preview'));
+      await synced(pages);
+      await input.detach();
+    }
   });
   await check('real keyboard insertion and deletion sync to partners', async () => {
     await a.bringToFront();
@@ -294,6 +344,35 @@ try {
     await a.evaluate(() => quill.getModule('history').undo());
     assert((await synced(pages)) === before, 'Undo restores only the clear operation');
   });
+  await check('all editors share layout settings and new tabs load the same program version', async () => {
+    const flags = await Promise.all(pages.map(p => p.evaluate(() => amIMaster)));
+    const master = pages[flags.indexOf(true)];
+    assert(master);
+    await master.evaluate(() => {
+      document.body.dataset.theme = 'green';
+      document.getElementById('fontSizeInput').value = '54';
+      document.getElementById('scaleInput').value = '115';
+      document.getElementById('padXInput').value = '26';
+      document.getElementById('padYInput').value = '22';
+      applyAndSync();
+    });
+    for (const page of pages) await page.waitForFunction(() => document.querySelector('.ql-editor').style.fontSize === '54px' && document.body.dataset.theme === 'green');
+    const expected = await master.evaluate(() => ({font:getComputedStyle(quill.root).fontFamily,size:quill.root.style.fontSize,zoom:quill.root.style.zoom,padding:quill.root.style.padding}));
+    for (const page of pages) {
+      assert.deepEqual(await page.evaluate(() => ({font:getComputedStyle(quill.root).fontFamily,size:quill.root.style.fontSize,zoom:quill.root.style.zoom,padding:quill.root.style.padding})),expected);
+      assert.equal(await page.locator('#fontSizeInput').isDisabled(), page !== master);
+    }
+    const fresh=await browser.newPage();await fresh.goto(`${base}/edit/TEST`);
+    await fresh.waitForFunction(() => document.querySelector('.ql-editor').style.fontSize==='54px');
+    const health=await (await fetch(base+'/healthz')).json();
+    assert((await fresh.locator('#clientVersionText').innerText()).includes(health.asset_version));
+    assert((await fresh.locator('script[src*="collaboration.js"]').getAttribute('src')).includes('v='+health.asset_version));
+    await fresh.close();
+    await master.evaluate(() => {
+      document.body.dataset.theme='dark';document.getElementById('fontSizeInput').value='48';
+      document.getElementById('scaleInput').value='100';document.getElementById('padXInput').value='8';document.getElementById('padYInput').value='10';applyAndSync();
+    });
+  });
   await a.screenshot({ path: resolve(dir, 'editor.png') });
   await check('Render free mode does not claim permanent server storage', async () => {
     server.kill();
@@ -316,3 +395,4 @@ try {
   if (browser) await browser.close();
   if (server) server.kill();
 }
+

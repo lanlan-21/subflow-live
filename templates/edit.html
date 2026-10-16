@@ -6,7 +6,7 @@
 
 <link href="/static/quill.snow.css" rel="stylesheet">
 <link href="/static/kai.css" rel="stylesheet">
-  <script src="/static/collaboration.js"></script>
+  <script src="/static/collaboration.js?v={{ asset_version }}"></script>
   <script src="/static/qrcode.js"></script>
 <style>
     * { box-sizing: border-box; }
@@ -195,6 +195,8 @@
     <div class="status-left-box">
       <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
       <div class="save-alert-badge" onclick="exportTxt()"><span id="syncStatus" role="status" aria-live="polite">正在載入本機備份…</span></div>
+      <span id="imePreviewStatus" title="顯示目前輸入法提供的組字內容">組字預覽就緒</span>
+      <span id="clientVersionText" title="兩位聽打員應顯示相同版本">版本 {{ asset_version }}</span>
     </div>
     <div class="status-right-box">
       <div class="viewer-badge"><span>📺 觀眾：</span><strong id="viewerCountText" style="color: #93c5fd;">0</strong></div>
@@ -270,8 +272,16 @@
     const collaboration = createCollaboration({
       quill, socket, room: roomId, token: editToken,
       onStatus: message => { document.getElementById('syncStatus').textContent = message; },
+      onComposition: info => {
+        const status = document.getElementById('imePreviewStatus');
+        status.textContent = info.active ? `我的組字：${info.text || '正在組字…'}` : '組字預覽就緒';
+        if (info.active) {
+          status.dataset.lastPreview = info.text;
+          status.dataset.source = info.source;
+        }
+        status.dataset.events = JSON.stringify(info.events);
+      },
       onSettings: settings => {
-        if (!amIMaster) return;
         document.body.setAttribute('data-theme', settings.theme);
         document.getElementById('themeSelect').value = settings.theme;
         document.getElementById('fontSizeInput').value = settings.size;
@@ -324,6 +334,10 @@
 
       amIMaster = (data.master_client_id === socket.id);
       currentMasterClientId = data.master_client_id;
+      document.querySelectorAll('#themeSelect, #fontSizeInput, #scaleInput, #padXInput, #padYInput, .btn-step').forEach(control => {
+        control.disabled = !amIMaster;
+        control.title = amIMaster ? '' : '共筆版面跟隨主控；接管主投影後可調整';
+      });
 
       if (totalEditors <= 1) {
         document.getElementById('onlineDot').style.background = '#eab308';
@@ -341,7 +355,7 @@
       } else {
           masterToggleBtn.className = "btn btn-master-role inactive";
           masterToggleBtn.innerText = "👑 點擊接管主投影";
-          modeHintText.innerText = "身分：【獨立協作視圖】";
+          modeHintText.innerText = "身分：【共筆視圖・版面跟隨主控】";
       }
     });
 

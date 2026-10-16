@@ -1,5 +1,6 @@
 """Durable single-process Yjs / Socket.IO collaboration server."""
 import base64
+import hashlib
 import json
 import os
 import secrets
@@ -30,6 +31,8 @@ def load_secret():
 
 
 app = Flask(__name__)
+ASSET_VERSION = hashlib.sha256((Path(__file__).parent / 'static' / 'collaboration.js').read_bytes()).hexdigest()[:12]
+app.jinja_env.globals['asset_version'] = ASSET_VERSION
 app.config['SECRET_KEY'] = load_secret()
 socketio = SocketIO(app, async_mode='threading', ping_timeout=60, ping_interval=25, max_http_buffer_size=4 * 1024 * 1024)
 signer = URLSafeSerializer(app.config['SECRET_KEY'], salt='subflow-editor-v2')
@@ -115,7 +118,7 @@ def health():
     try:
         with database() as db:
             db.execute('SELECT 1').fetchone()
-        return jsonify(status='ok', durable_storage=STORAGE_DURABLE)
+        return jsonify(status='ok', durable_storage=STORAGE_DURABLE, asset_version=ASSET_VERSION)
     except Exception:
         return jsonify(status='storage_unavailable'), 503
 
@@ -210,7 +213,7 @@ def handle_join(data):
         else:
             r['viewers'].add(request.sid)
         broadcast_roles(room)
-        return dict(state=encode(r['doc'].get_update()), settings=r['settings'], durable=STORAGE_DURABLE, peers=[dict(client_id=m['client_id'], state=m['state']) for m in members.values() if m['room'] == room and m['state'] is not None])
+        return dict(state=encode(r['doc'].get_update()), settings=r['settings'], durable=STORAGE_DURABLE, asset_version=ASSET_VERSION, peers=[dict(client_id=m['client_id'], state=m['state']) for m in members.values() if m['room'] == room and m['state'] is not None])
 
 
 @socketio.on('document_update')

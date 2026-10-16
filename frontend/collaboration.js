@@ -10,6 +10,7 @@ import { io } from 'socket.io-client';
 window.Quill = Quill;
 window.QuillCursors = QuillCursors;
 window.io = io;
+const runtimeVersion = new URL(document.currentScript?.src || window.location.href).searchParams.get('v');
 
 const encode = bytes => {
   let binary = '';
@@ -18,7 +19,7 @@ const encode = bytes => {
 };
 const decode = data => Uint8Array.from(atob(data), char => char.charCodeAt(0));
 
-window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {} }) {
+window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {}, onComposition = () => {} }) {
   const doc = new Y.Doc(); // A new ID for every document instance, including each tab.
   const text = doc.getText('text');
   const awareness = new Awareness(doc);
@@ -26,6 +27,9 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   let composing = false;
   let compositionGeneration = 0;
   let compositionAnchor = null;
+  let compositionOriginal = '';
+  let compositionEnding = false;
+  const compositionEvents = {};
   let remoteQueue = [];
   let joined = false;
   let pending = [];
@@ -74,32 +78,61 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     else Y.applyUpdate(doc, update, network);
   }
 
-  function publishComposition(value) {
-    if (readOnly || !composing || !compositionAnchor) return;
+  function publishComposition(value, source = 'compositionupdate') {
+    if (readOnly || !composing || compositionEnding || !compositionAnchor) return;
+    compositionEvents[source] = (compositionEvents[source] || 0) + 1;
+    const draft = typeof value === 'string' ? value.slice(0, 160) : '';
+    const previous = awareness.getLocalState()?.compositionPreview;
+    onComposition({ active: true, text: draft, source, events: { ...compositionEvents } });
+    if (previous?.text === draft) return;
     awareness.setLocalStateField('compositionPreview', {
-      anchor: compositionAnchor, text: typeof value === 'string' ? value.slice(0, 160) : ''
+      anchor: compositionAnchor, text: draft
     });
   }
   quill.root.addEventListener('compositionstart', () => {
     if (readOnly) return;
     compositionGeneration++;
+    compositionEnding = false;
     composing = true;
     const range = quill.getSelection();
+    compositionOriginal = quill.root.textContent.replace(/\uFEFF/g, '');
     compositionAnchor = Y.createRelativePositionFromTypeIndex(text, Math.min(range?.index ?? text.length, text.length));
     undo.stopCapturing();
     awareness.setLocalStateField('composing', true);
-    publishComposition('');
+    publishComposition('', 'compositionstart');
   });
   quill.root.addEventListener('compositionupdate', event => publishComposition(event.data));
+  quill.root.addEventListener('beforeinput', event => {
+    if (composing && event.inputType === 'insertCompositionText' && typeof event.data === 'string') {
+      publishComposition(event.data, 'beforeinput');
+    }
+  });
+  quill.root.addEventListener('input', event => {
+    if (!composing || !(event.isComposing || event.inputType === 'insertCompositionText')) return;
+    if (typeof event.data === 'string') publishComposition(event.data, 'input');
+    else {
+      // Some IMEs expose preedit DOM mutations without CompositionEvent.data.
+      const current = quill.root.textContent.replace(/\uFEFF/g, '');
+      let start = 0, end = 0;
+      while (start < compositionOriginal.length && start < current.length && compositionOriginal[start] === current[start]) start++;
+      while (end < compositionOriginal.length - start && end < current.length - start && compositionOriginal[compositionOriginal.length - end - 1] === current[current.length - end - 1]) end++;
+      const draft = current.slice(start, current.length - end);
+      if (draft || current !== compositionOriginal) publishComposition(draft, 'input-dom');
+    }
+  });
   quill.root.addEventListener('compositionend', () => {
     if (readOnly) return;
     const currentComposition = compositionGeneration;
+    compositionEnding = true;
     awareness.setLocalStateField('compositionPreview', null);
+    onComposition({ active: false, events: { ...compositionEvents } });
+    sendPresence();
     // Quill commits the final IME mutation before remote changes are applied.
     setTimeout(() => {
       if (currentComposition !== compositionGeneration) return;
       quill.update('user');
       composing = false;
+      compositionEnding = false;
       compositionAnchor = null;
       const queue = remoteQueue;
       remoteQueue = [];
@@ -110,14 +143,15 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     }, 0);
   });
   quill.root.addEventListener('blur', () => {
-    if (!readOnly) awareness.setLocalStateField('compositionPreview', null);
+    // Native candidate windows can temporarily take focus during composition.
+    if (!readOnly && !composing) awareness.setLocalStateField('compositionPreview', null);
   });
 
   // A separate overlay never inserts preedit text into Quill, Yjs or history.
   const previewNodes = new Map();
   if (!readOnly) {
     const style = document.createElement('style');
-    style.textContent = '.remote-ime-preview{position:absolute;z-index:60;pointer-events:none;max-width:min(320px,90%);padding:5px 8px;border:2px solid;border-radius:6px;background:#111827;color:#f8fafc;font:16px/1.4 system-ui,sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 2px 8px #0008}';
+    style.textContent = '.remote-ime-preview{position:absolute;z-index:60;pointer-events:none;max-width:min(420px,90%);padding:5px 8px;border:2px solid;border-radius:6px;background:#111827;color:#f8fafc;font:24px/1.35 "TW-Kai","DFKai-SB",sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 2px 8px #0008}';
     document.head.append(style);
   }
   let previewFrame;
@@ -177,8 +211,9 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   let presenceTimer;
   awareness.on('update', (_changes, origin) => {
     if (origin === network || readOnly) return;
-    clearTimeout(presenceTimer);
-    presenceTimer = setTimeout(sendPresence, 40);
+    // Throttle with a trailing latest state; continuous typing must not defer it.
+    if (presenceTimer) return;
+    presenceTimer = setTimeout(() => { presenceTimer = null; sendPresence(); }, 40);
   });
   const colors = ['#22c55e', '#38bdf8', '#e879f9', '#fb923c', '#a78bfa', '#facc15'];
   if (readOnly) awareness.setLocalState(null);
@@ -229,6 +264,10 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       if (error || result?.error || !result?.state) {
         status(result?.error || '無法加入文件，正在重試');
         timer = setTimeout(join, 2000);
+        return;
+      }
+      if (runtimeVersion && result.asset_version && runtimeVersion !== result.asset_version) {
+        status('程式已更新，請重新整理以使用同一版本共筆；本機修改仍保留');
         return;
       }
       receive(decode(result.state));
