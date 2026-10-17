@@ -155,6 +155,23 @@ def test_presence_uses_server_bound_identity():
     assert event['args'][0]['client_id'] == 123
 
 
+def test_projection_identity_is_shared_on_join_takeover_and_disconnect():
+    master, first = client(cid=101)
+    partner, second = client(cid=202)
+    viewer, initial = client(editor=False, cid=303)
+    assert first['master_doc_client_id'] == second['master_doc_client_id'] == initial['master_doc_client_id'] == 101
+    viewer.get_received()
+    partner.emit('claim_master')
+    roles = [e for e in viewer.get_received() if e['name'] == 'role_status_update']
+    assert roles[-1]['args'][0]['master_doc_client_id'] == 202
+    _, late = client(editor=False, cid=404)
+    assert late['master_doc_client_id'] == 202
+    viewer.get_received()
+    partner.disconnect()
+    roles = [e for e in viewer.get_received() if e['name'] == 'role_status_update']
+    assert roles[-1]['args'][0]['master_doc_client_id'] == 101
+
+
 def test_invalid_update_does_not_corrupt_document():
     a, _ = client()
     d, text = document()

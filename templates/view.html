@@ -127,7 +127,7 @@
       const px = ((masterSettings.pad_x || 8) * combinedScale) + 'px';
       const py = ((masterSettings.pad_y || 16) * combinedScale) + 'px';
       // Keep the default readable even if the projection master uses tiny text.
-      const baseFontSize = Math.max(36, (masterSettings.size || 48) * masterScaleFactor);
+      const baseFontSize = Math.max(48, (masterSettings.size || 48) * masterScaleFactor) * 1.25;
       const finalFontSize = (baseFontSize * localViewerScale) + 'px';
 
       qlEditor.style.fontSize = finalFontSize;
@@ -187,6 +187,7 @@
     applyCombinedSettings();
     const collaboration = createCollaboration({
       quill, socket, room: roomId, readOnly: true,
+      onPreviewChange: scheduleFollow,
       onSettings: settings => { masterSettings = settings; applyCombinedSettings(); },
       onStatus: status => { document.getElementById('viewerStatus').textContent = status; if (status.startsWith('已同步')) socket.emit('request_projection'); }
     });

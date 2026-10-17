@@ -11,6 +11,7 @@
 - IndexedDB 保存本機文件。重新整理、斷線重連時合併本機與伺服器文件，不以伺服器全文覆蓋本機稿。
 - 伺服器寫入 SQLite 成功後才回覆已儲存；未確認的修改保留並重試。
 - 有修改時每分鐘最多自動保留一版，保留最近 120 版；清空前另保留一版。版本可下載，不會覆蓋其他人正在編輯的稿件。
+- 觀眾即時跟隨主投影的未確認注音／組字，預設字級放大 25%（一般為 60px）；可手動捲動與恢復跟隨。
 - 觀眾連線不能直接寫入文件或接管投影。`/edit/房號` 仍是原有的編輯邀請入口，知道該網址的人可以編輯；此版沒有新增帳號權限系統。
 - 語音辨識的暫時結果只顯示預覽，確認結果才寫入共筆，避免辨識修正造成重複文字。
 - 所有編輯器與同步程式資產由本機服務提供，作業中不依賴第三方 CDN。
@@ -63,6 +64,7 @@ npm run build
 python -m pip install -r requirements-dev.txt
 python -m pytest tests/test_server.py -q
 npm test
+node tests/viewer-live.mjs
 ```
 
 瀏覽器測試預設使用已安裝的 Chrome；可設 `BROWSER_CHANNEL=msedge` 改用 Edge。Windows 預設使用 `.venv/Scripts/python.exe`，其他平台使用 `python`；可用 `PYTHON` 指定。測試會自行啟動獨立伺服器、建立暫存資料庫與瀏覽器設定檔；`TEST_WORK` 可指定測試輸出父目錄。`SOAK_SECONDS` 預設 60，可提高為 3600 或整場工作時長。

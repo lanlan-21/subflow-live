@@ -43,7 +43,7 @@ try {
   await check('automatic screen lock and mobile viewport', async () => {
     await page.waitForFunction(() => document.getElementById('wakeLockStatus').dataset.active === 'true');
     assert.equal(await page.evaluate(() => innerWidth), 390);
-    assert.equal(await page.locator('.ql-editor').evaluate(el => getComputedStyle(el).fontSize), '48px');
+    assert.equal(await page.locator('.ql-editor').evaluate(el => getComputedStyle(el).fontSize), '60px');
   });
   await check('footer and 44px controls fit portrait, landscape and desktop', async () => {
     for (const size of [{width:320,height:568},{width:390,height:844},{width:844,height:390},{width:1280,height:720}]) {
@@ -64,7 +64,7 @@ try {
     await page.waitForFunction(() => document.querySelector('.ql-editor').textContent.includes('👏👏👏👏'));
     await page.getByRole('button', {name:'放大文字',exact:true}).click();
     const size = await page.locator('.ql-editor').evaluate(el => getComputedStyle(el).fontSize);
-    assert(parseFloat(size) > 48);
+    assert(parseFloat(size) > 60);
     assert.equal(await editor.locator('.ql-editor').evaluate(el => getComputedStyle(el).fontSize), '48px');
     await page.reload();
     await page.waitForFunction(() => document.querySelector('.ql-editor').textContent.includes('👏👏👏👏'));

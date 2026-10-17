@@ -167,7 +167,7 @@ def revision(room_id, revision):
 
 def broadcast_roles(room):
     r = rooms[room]
-    socketio.emit('role_status_update', dict(master_client_id=r['master'], total_editors=len(r['editors']), total_viewers=len(r['viewers']), active_editors=list(r['editors'])), to=room)
+    socketio.emit('role_status_update', dict(master_client_id=r['master'], master_doc_client_id=r['editors'].get(r['master']), total_editors=len(r['editors']), total_viewers=len(r['viewers']), active_editors=list(r['editors'])), to=room)
 
 
 def remove_member(sid):
@@ -213,7 +213,7 @@ def handle_join(data):
         else:
             r['viewers'].add(request.sid)
         broadcast_roles(room)
-        return dict(state=encode(r['doc'].get_update()), settings=r['settings'], durable=STORAGE_DURABLE, asset_version=ASSET_VERSION, peers=[dict(client_id=m['client_id'], state=m['state']) for m in members.values() if m['room'] == room and m['state'] is not None])
+        return dict(state=encode(r['doc'].get_update()), settings=r['settings'], master_doc_client_id=r['editors'].get(r['master']), durable=STORAGE_DURABLE, asset_version=ASSET_VERSION, peers=[dict(client_id=m['client_id'], state=m['state']) for m in members.values() if m['room'] == room and m['state'] is not None])
 
 
 @socketio.on('document_update')

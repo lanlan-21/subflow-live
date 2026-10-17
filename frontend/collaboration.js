@@ -34,7 +34,7 @@ const encode = bytes => {
 };
 const decode = data => Uint8Array.from(atob(data), char => char.charCodeAt(0));
 
-window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {}, onComposition = () => {}, onPeerComposition = () => {} }) {
+window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {}, onComposition = () => {}, onPeerComposition = () => {}, onPreviewChange = () => {} }) {
   const doc = new Y.Doc(); // A new ID for every document instance, including each tab.
   const text = doc.getText('text');
   const imeCommits = doc.getMap('imeCommits');
@@ -57,6 +57,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   let backupReady = false;
   let durable = true;
   let localError = '';
+  let projectionClientId = null;
   quill.scroll.registry.register(RemotePreedit);
   quill.enable(false);
   const binding = new QuillBinding(text, quill, awareness);
@@ -99,7 +100,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   function publishComposition(value, source = 'compositionupdate') {
     if (readOnly || !composing || compositionEnding || !compositionAnchor) return;
     compositionEvents[source] = (compositionEvents[source] || 0) + 1;
-    const draft = typeof value === 'string' ? value.slice(0, 160) : '';
+    const draft = typeof value === 'string' ? value.slice(0, 512) : '';
     const previous = awareness.getLocalState()?.compositionPreview;
     onComposition({ active: true, text: draft, source, events: { ...compositionEvents } });
     if (previous?.text === draft) return;
@@ -147,7 +148,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     const currentComposition = compositionGeneration;
     compositionEnding = true;
     const preview = awareness.getLocalState()?.compositionPreview;
-    const finalText = typeof event.data === 'string' ? event.data.slice(0, 160) : '';
+    const finalText = typeof event.data === 'string' ? event.data.slice(0, 512) : '';
     onComposition({ active: false, events: { ...compositionEvents } });
     // Quill commits the final IME mutation before remote changes are applied.
     setTimeout(() => {
@@ -186,7 +187,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   // Transient inline leaves push the following characters aside without
   // inserting text into Quill's Delta, Yjs, persistence or undo history.
   const previewNodes = new Map();
-  if (!readOnly) {
+  {
     const style = document.createElement('style');
     style.textContent = '.remote-ime-preview{display:inline;pointer-events:none;user-select:none;-webkit-user-select:none;background:transparent;border:0;padding:0;box-shadow:none;color:inherit;font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}.remote-ime-preview::before{content:attr(data-preview)}';
     document.head.append(style);
@@ -201,13 +202,12 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       if (state.user) versions.push({ id, version: state.clientVersion || null, current: state.clientVersion === runtimeVersion });
       if (!state.composing || !state.compositionPreview) return;
       peers.push({ id, name: String(state.user?.name || '夥伴').slice(0, 40),
-        text: typeof state.compositionPreview.text === 'string' ? state.compositionPreview.text.slice(0, 160) : '' });
+        text: typeof state.compositionPreview.text === 'string' ? state.compositionPreview.text.slice(0, 512) : '' });
     });
     // This view is independent of anchors and each collaborator's scroll position.
     onPeerComposition(peers, { versions });
   }
   function renderCompositionPreviews(immediate = false) {
-    if (readOnly) return;
     if (immediate === true) {
       if (previewFrame) cancelAnimationFrame(previewFrame);
       drawCompositionPreviews();
@@ -221,8 +221,12 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       const active = new Set();
       const selection = quill.hasFocus() ? quill.getSelection() : null;
       let changed = false;
+      let layoutChanged = false;
       awareness.getStates().forEach((state, id) => {
         if (id === doc.clientID) return;
+        // Audience mirrors the server-selected projection master, rather than
+        // exposing every corrector's unconfirmed IME to the audience.
+        if (readOnly && id !== projectionClientId) return;
         try {
           let preview = state.composing ? state.compositionPreview : null;
           if (state.compositionCommit) {
@@ -235,7 +239,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
           if (!preview) return;
           const anchor = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(preview.anchor), doc);
           if (!anchor || anchor.type !== text) return;
-          const draft = typeof preview.text === 'string' ? preview.text.slice(0, 160) : '';
+          const draft = typeof preview.text === 'string' ? preview.text.slice(0, 512) : '';
           if (!draft) return;
           const index = Math.min(anchor.index, quill.getLength() - 1);
           active.add(id);
@@ -255,7 +259,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
           node.contentEditable = 'false';
           node.dataset.clientId = String(id);
           const name = String(state.user?.name || '夥伴').slice(0, 40);
-          if (node.dataset.preview !== draft) node.dataset.preview = draft;
+          if (node.dataset.preview !== draft) { node.dataset.preview = draft; layoutChanged = true; }
           node.setAttribute('aria-label', `${name}正在組字：${draft}`);
         } catch { /* A deleted or malformed anchor has no safe preview position. */ }
       });
@@ -267,6 +271,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
         if (selection) quill.setSelection(selection, 'silent');
       }
       quill.getModule('cursors')?.update();
+      if (changed || layoutChanged) onPreviewChange();
   }
   // Yjs observers have already updated Quill here. Remove a completed preview
   // in the same JavaScript task, before a frame can paint both copies.
@@ -361,6 +366,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
         status('程式已更新，請重新整理以使用同一版本共筆；本機修改仍保留');
         return;
       }
+      projectionClientId = Number.isSafeInteger(result.master_doc_client_id) ? result.master_doc_client_id : null;
       receive(decode(result.state));
       joined = true;
       durable = result.durable !== false;
@@ -378,6 +384,10 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   }
 
   socket.on('connect', join);
+  socket.on('role_status_update', data => {
+    projectionClientId = Number.isSafeInteger(data.master_doc_client_id) ? data.master_doc_client_id : null;
+    renderCompositionPreviews(true);
+  });
   socket.on('disconnect', () => {
     generation++;
     joined = false;

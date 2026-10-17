@@ -120,6 +120,8 @@ try {
     assert(value.includes('中文選字') && value.includes('組字時補詞'));
   });
   await check('browser IME input pipeline commits Chinese while partner corrects', async () => {
+    await a.evaluate(() => socket.emit('claim_master'));
+    await a.waitForFunction(() => amIMaster);
     await a.bringToFront();
     await a.evaluate(() => { quill.focus(); quill.setSelection(quill.getLength() - 1, 0); });
     const input = await browser.newCDPSession(a);
@@ -127,7 +129,7 @@ try {
     await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('ㄓㄨㄥ'));
     assert(!(await content(b)).includes('ㄓㄨㄥ'));
     assert(!(await content(viewer)).includes('ㄓㄨㄥ'));
-    assert.equal(await viewer.locator('.remote-ime-preview').count(), 0);
+    await viewer.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview === 'ㄓㄨㄥ');
     assert.equal(await a.locator('.remote-ime-preview').count(), 0);
     await input.send('Input.imeSetComposition', { text: 'ㄓㄨㄥˋ', selectionStart: 4, selectionEnd: 4 });
     await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('ㄓㄨㄥˋ'));
