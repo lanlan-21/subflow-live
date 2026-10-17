@@ -196,6 +196,73 @@ try {
     await b.waitForFunction(() => !document.querySelector('.remote-ime-preview'));
     await synced(pages);
   });
+  await check('preview remains visible when new composition follows an unsent completed edit', async () => {
+    await a.evaluate(() => {
+      quill.insertText(0, '剛完成', 'user');
+      quill.focus(); quill.setSelection(2, 0);
+      quill.root.dispatchEvent(new CompositionEvent('compositionstart'));
+      quill.root.dispatchEvent(new CompositionEvent('compositionupdate', {data:'ㄓㄨㄥ'}));
+    });
+    try {
+      await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄓㄨㄥ'), null, {timeout:1500,polling:20});
+      assert((await content(b)).includes('剛完成'));
+      assert(!(await content(b)).includes('ㄓㄨㄥ'));
+    } finally {
+      await a.evaluate(() => quill.root.dispatchEvent(new CompositionEvent('compositionend')));
+    }
+    await synced(pages);
+  });
+  await check('simultaneous IME keeps partner preview visible before its anchor text can be applied', async () => {
+    const before = await content(b);
+    await b.evaluate(() => {
+      quill.focus(); quill.setSelection(0,0);
+      quill.root.dispatchEvent(new CompositionEvent('compositionstart'));
+      quill.root.dispatchEvent(new CompositionEvent('compositionupdate',{data:'ㄅㄆㄇ'}));
+    });
+    await a.evaluate(() => {
+      quill.insertText(0,'先完成的新詞','user');
+      quill.focus(); quill.setSelection(2,0);
+      quill.root.dispatchEvent(new CompositionEvent('compositionstart'));
+      quill.root.dispatchEvent(new CompositionEvent('compositionupdate',{data:'ㄓㄨㄥ'}));
+      quill.insertText(quill.getLength()-1,'本次組字中的修改','user');
+    });
+    await b.waitForFunction(() => document.getElementById('peerImeStatus').textContent.includes('ㄓㄨㄥ'));
+    assert.equal(await content(b),before);
+    assert((await b.locator('#imePreviewStatus').innerText()).includes('ㄅㄆㄇ'));
+    await b.evaluate(() => quill.root.dispatchEvent(new CompositionEvent('compositionend')));
+    await b.waitForFunction(() => quill.getText().includes('先完成的新詞'));
+    assert(!(await content(b)).includes('本次組字中的修改'));
+    await a.evaluate(() => quill.root.dispatchEvent(new CompositionEvent('compositionend')));
+    await synced(pages);
+    await b.waitForFunction(() => document.getElementById('peerImeStatus').dataset.peerCount==='0');
+  });
+  await check('completed updates behind an in-flight save are sent during the next IME session', async () => {
+    await a.evaluate(() => {
+      const original=socket.emit;
+      window.heldSave=false;
+      socket.emit=function(event,...args) {
+        if(event==='document_update') {
+          socket.emit=original;
+          const callback=args.pop(); window.heldSave=true;
+          return original.call(this,event,...args,(...reply)=>setTimeout(()=>callback(...reply),350));
+        }
+        return original.call(this,event,...args);
+      };
+      quill.insertText(0,'前筆','user');
+    });
+    await a.waitForFunction(()=>window.heldSave);
+    await a.evaluate(()=>{
+      quill.insertText(0,'接續完成','user');
+      quill.focus();quill.setSelection(2,0);
+      quill.root.dispatchEvent(new CompositionEvent('compositionstart'));
+      quill.root.dispatchEvent(new CompositionEvent('compositionupdate',{data:'ㄒㄧㄣ'}));
+    });
+    await b.waitForFunction(()=>quill.getText().includes('接續完成'));
+    await b.waitForFunction(()=>document.querySelector('.remote-ime-preview')?.textContent.includes('ㄒㄧㄣ'));
+    assert(!(await content(b)).includes('ㄒㄧㄣ'));
+    await a.evaluate(()=>quill.root.dispatchEvent(new CompositionEvent('compositionend')));
+    await synced(pages);
+  });
   await check('native IME preview survives missing compositionupdate and null input data', async () => {
     for (const domFallback of [false, true]) {
       await a.bringToFront();
@@ -372,6 +439,17 @@ try {
       document.body.dataset.theme='dark';document.getElementById('fontSizeInput').value='48';
       document.getElementById('scaleInput').value='100';document.getElementById('padXInput').value='8';document.getElementById('padYInput').value='10';applyAndSync();
     });
+  });
+  await check('partner version mismatch is visible instead of silently using an old editor', async () => {
+    await b.evaluate(() => collaboration.awareness.setLocalStateField('clientVersion','old-test-version'));
+    await a.waitForFunction(() => document.getElementById('peerImeStatus').dataset.outdated==='true');
+    assert((await a.locator('#peerImeStatus').innerText()).includes('舊版'));
+    const health=await (await fetch(base+'/healthz')).json();
+    await b.evaluate(version => collaboration.awareness.setLocalStateField('clientVersion',version),health.asset_version);
+    await a.waitForFunction(() => document.getElementById('peerImeStatus').dataset.outdated==='false');
+    const versions=JSON.parse(await a.locator('#peerImeStatus').getAttribute('data-peer-versions'));
+    assert.equal(versions.length,2);
+    assert(versions.every(peer=>peer.current));
   });
   await a.screenshot({ path: resolve(dir, 'editor.png') });
   await check('Render free mode does not claim permanent server storage', async () => {

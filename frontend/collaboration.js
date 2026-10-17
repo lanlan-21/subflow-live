@@ -19,7 +19,7 @@ const encode = bytes => {
 };
 const decode = data => Uint8Array.from(atob(data), char => char.charCodeAt(0));
 
-window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {}, onComposition = () => {} }) {
+window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {}, onComposition = () => {}, onPeerComposition = () => {} }) {
   const doc = new Y.Doc(); // A new ID for every document instance, including each tab.
   const text = doc.getText('text');
   const awareness = new Awareness(doc);
@@ -29,6 +29,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   let compositionAnchor = null;
   let compositionOriginal = '';
   let compositionEnding = false;
+  let compositionSafeUpdates = new Set();
   const compositionEvents = {};
   let remoteQueue = [];
   let joined = false;
@@ -93,6 +94,9 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     if (readOnly) return;
     compositionGeneration++;
     compositionEnding = false;
+    // Only updates completed before this IME session can be flushed during it.
+    // Otherwise its anchor can refer to text that peers have never received.
+    compositionSafeUpdates = new Set(pending);
     composing = true;
     const range = quill.getSelection();
     compositionOriginal = quill.root.textContent.replace(/\uFEFF/g, '');
@@ -100,6 +104,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     undo.stopCapturing();
     awareness.setLocalStateField('composing', true);
     publishComposition('', 'compositionstart');
+    schedule(0);
   });
   quill.root.addEventListener('compositionupdate', event => publishComposition(event.data));
   quill.root.addEventListener('beforeinput', event => {
@@ -134,6 +139,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       composing = false;
       compositionEnding = false;
       compositionAnchor = null;
+      compositionSafeUpdates.clear();
       const queue = remoteQueue;
       remoteQueue = [];
       doc.transact(() => queue.forEach(update => Y.applyUpdate(doc, update, network)), network);
@@ -155,6 +161,20 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     document.head.append(style);
   }
   let previewFrame;
+  function notifyPeerCompositions() {
+    if (readOnly) return;
+    const peers = [];
+    const versions = [];
+    awareness.getStates().forEach((state, id) => {
+      if (id === doc.clientID) return;
+      if (state.user) versions.push({ id, version: state.clientVersion || null, current: state.clientVersion === runtimeVersion });
+      if (!state.composing || !state.compositionPreview) return;
+      peers.push({ id, name: String(state.user?.name || '夥伴').slice(0, 40),
+        text: typeof state.compositionPreview.text === 'string' ? state.compositionPreview.text.slice(0, 160) : '' });
+    });
+    // This view is independent of anchors and each collaborator's scroll position.
+    onPeerComposition(peers, { versions });
+  }
   function renderCompositionPreviews() {
     if (readOnly || previewFrame) return;
     previewFrame = requestAnimationFrame(() => {
@@ -190,6 +210,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     });
   }
   awareness.on('change', renderCompositionPreviews);
+  awareness.on('change', notifyPeerCompositions);
   quill.on('editor-change', renderCompositionPreviews);
   window.addEventListener('resize', renderCompositionPreviews);
 
@@ -218,6 +239,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   const colors = ['#22c55e', '#38bdf8', '#e879f9', '#fb923c', '#a78bfa', '#facc15'];
   if (readOnly) awareness.setLocalState(null);
   else {
+    awareness.setLocalStateField('clientVersion', runtimeVersion);
     const name = localStorage.getItem('subflow-name') || `聽打員 ${doc.clientID.toString().slice(-4)}`;
     awareness.setLocalStateField('user', { name, color: colors[doc.clientID % colors.length] });
   }
@@ -228,8 +250,13 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   }
 
   function flush() {
-    if (!joined || sending || !pending.length || composing || readOnly) return;
-    const count = pending.length;
+    if (!joined || sending || !pending.length || readOnly) return;
+    let count = pending.length;
+    if (composing) {
+      count = 0;
+      while (count < pending.length && compositionSafeUpdates.has(pending[count])) count++;
+      if (!count) return;
+    }
     const update = Y.mergeUpdates(pending.slice(0, count));
     const current = generation;
     sending = true;

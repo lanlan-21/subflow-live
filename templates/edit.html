@@ -71,6 +71,8 @@
 
     .statusbar { padding: 6px 16px; background: #1e1e1e; border-top: 1px solid #333; font-size: 13px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; z-index: 100; flex-wrap: wrap; gap: 8px; }
     .status-left-box { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    #peerImeStatus { display: inline-block; width: 340px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #bae6fd; }
+    #peerImeStatus[data-outdated="true"] { color: #fde68a; }
     .save-alert-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; background: rgba(217, 119, 6, 0.2); border: 1px solid #d97706; border-radius: 12px; color: #fde68a; font-size: 12px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
     .save-alert-badge:hover { background: rgba(217, 119, 6, 0.4); color: #ffffff; }
     .status-right-box { display: flex; align-items: center; gap: 14px; }
@@ -196,6 +198,7 @@
       <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
       <div class="save-alert-badge" onclick="exportTxt()"><span id="syncStatus" role="status" aria-live="polite">正在載入本機備份…</span></div>
       <span id="imePreviewStatus" title="顯示目前輸入法提供的組字內容">組字預覽就緒</span>
+      <span id="peerImeStatus">夥伴組字：尚未輸入</span>
       <span id="clientVersionText" title="兩位聽打員應顯示相同版本">版本 {{ asset_version }}</span>
     </div>
     <div class="status-right-box">
@@ -278,8 +281,20 @@
         if (info.active) {
           status.dataset.lastPreview = info.text;
           status.dataset.source = info.source;
+          if (info.text) status.dataset.lastNonEmptyPreview = info.text;
         }
         status.dataset.events = JSON.stringify(info.events);
+      },
+      onPeerComposition: (peers, info) => {
+        const status = document.getElementById('peerImeStatus');
+        const message = peers.map(peer => `${peer.name}：${peer.text || '正在組字…'}`).join(' ｜ ');
+        const outdated = info.versions.some(peer => !peer.current);
+        const warning = outdated ? '（夥伴有舊版或未確認版本，請重新整理）' : '';
+        status.textContent = `夥伴組字：${message || '尚未輸入'}${warning}`;
+        status.title = message + warning;
+        status.dataset.peerCount = String(peers.length);
+        status.dataset.outdated = String(outdated);
+        status.dataset.peerVersions = JSON.stringify(info.versions);
       },
       onSettings: settings => {
         document.body.setAttribute('data-theme', settings.theme);
