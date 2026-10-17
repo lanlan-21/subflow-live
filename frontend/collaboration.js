@@ -12,6 +12,21 @@ window.QuillCursors = QuillCursors;
 window.io = io;
 const runtimeVersion = new URL(document.currentScript?.src || window.location.href).searchParams.get('v');
 
+// A Parchment leaf, like Quill's zero-length cursor, participates in layout but
+// has no document offset or Delta content. Render through CSS so native copy,
+// DOM-based IME fallback and text exports cannot pick up a partner's preedit.
+const { EmbedBlot } = Quill.import('parchment');
+class RemotePreedit extends EmbedBlot {
+  static blotName = 'remote-preedit';
+  static className = 'remote-ime-preview';
+  static tagName = 'SPAN';
+  static value() { return undefined; }
+  length() { return 0; }
+  value() { return ''; }
+  html() { return ''; }
+  index() { return 0; }
+}
+
 const encode = bytes => {
   let binary = '';
   for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
@@ -41,6 +56,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   let backupReady = false;
   let durable = true;
   let localError = '';
+  quill.scroll.registry.register(RemotePreedit);
   quill.enable(false);
   const binding = new QuillBinding(text, quill, awareness);
   const undo = new Y.UndoManager(text, { trackedOrigins: new Set([binding]), captureTimeout: 500 });
@@ -144,6 +160,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       remoteQueue = [];
       doc.transact(() => queue.forEach(update => Y.applyUpdate(doc, update, network)), network);
       awareness.setLocalStateField('composing', false);
+      renderCompositionPreviews();
       undo.stopCapturing();
       schedule();
     }, 0);
@@ -153,11 +170,12 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     if (!readOnly && !composing) awareness.setLocalStateField('compositionPreview', null);
   });
 
-  // A separate overlay never inserts preedit text into Quill, Yjs or history.
+  // Transient inline leaves push the following characters aside without
+  // inserting text into Quill's Delta, Yjs, persistence or undo history.
   const previewNodes = new Map();
   if (!readOnly) {
     const style = document.createElement('style');
-    style.textContent = '.remote-ime-preview{position:absolute;z-index:60;pointer-events:none;max-width:min(420px,90%);padding:5px 8px;border:2px solid;border-radius:6px;background:#111827;color:#f8fafc;font:24px/1.35 "TW-Kai","DFKai-SB",sans-serif;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 2px 8px #0008}';
+    style.textContent = '.remote-ime-preview{display:inline;pointer-events:none;user-select:none;-webkit-user-select:none;background:color-mix(in srgb,var(--peer-color) 16%,transparent);border-bottom:2px dotted var(--peer-color);font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}.remote-ime-preview::before{content:attr(data-preview)}';
     document.head.append(style);
   }
   let previewFrame;
@@ -179,34 +197,51 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     if (readOnly || previewFrame) return;
     previewFrame = requestAnimationFrame(() => {
       previewFrame = null;
+      // Never split or remove DOM nodes underneath this user's native IME.
+      // The independent status still receives presence during local composition.
+      if (composing) return;
       const active = new Set();
+      const selection = quill.hasFocus() ? quill.getSelection() : null;
+      let changed = false;
       awareness.getStates().forEach((state, id) => {
         if (id === doc.clientID || !state.composing || !state.compositionPreview) return;
         try {
           const preview = state.compositionPreview;
           const anchor = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(preview.anchor), doc);
           if (!anchor || anchor.type !== text) return;
-          active.add(id);
-          let node = previewNodes.get(id);
-          if (!node) {
-            node = document.createElement('div');
-            node.className = 'remote-ime-preview';
-            node.dataset.clientId = String(id);
-            quill.container.append(node);
-            previewNodes.set(id, node);
-          }
-          const name = String(state.user?.name || '夥伴').slice(0, 40);
           const draft = typeof preview.text === 'string' ? preview.text.slice(0, 160) : '';
-          node.textContent = `${name}：${draft || '正在組字…'}${draft ? '（組字中）' : ''}`;
-          node.style.borderColor = /^#[0-9a-f]{6}$/i.test(state.user?.color) ? state.user.color : '#38bdf8';
-          const bounds = quill.getBounds(Math.min(anchor.index, quill.getLength() - 1));
-          node.style.top = `${bounds.bottom + 4}px`;
-          node.style.left = `${Math.max(0, Math.min(bounds.left, quill.container.clientWidth - node.offsetWidth))}px`;
+          if (!draft) return;
+          const index = Math.min(anchor.index, quill.getLength() - 1);
+          active.add(id);
+          let blot = previewNodes.get(id);
+          if (!blot?.parent || blot.offset(quill.scroll) !== index) {
+            if (blot?.parent) blot.remove();
+            blot = quill.scroll.create('remote-preedit');
+            const [leaf, offset] = quill.getLeaf(index);
+            if (!leaf) return;
+            const parent = leaf.parent;
+            const ref = leaf.split(offset);
+            parent.insertBefore(blot, ref);
+            previewNodes.set(id, blot);
+            changed = true;
+          }
+          const node = blot.domNode;
+          node.contentEditable = 'false';
+          node.dataset.clientId = String(id);
+          const name = String(state.user?.name || '夥伴').slice(0, 40);
+          if (node.dataset.preview !== draft) node.dataset.preview = draft;
+          node.setAttribute('aria-label', `${name}正在組字：${draft}`);
+          node.style.setProperty('--peer-color', /^#[0-9a-f]{6}$/i.test(state.user?.color) ? state.user.color : '#38bdf8');
         } catch { /* A deleted or malformed anchor has no safe preview position. */ }
       });
-      for (const [id, node] of previewNodes) {
-        if (!active.has(id)) { node.remove(); previewNodes.delete(id); }
+      for (const [id, blot] of previewNodes) {
+        if (!active.has(id)) { blot.remove(); previewNodes.delete(id); changed = true; }
       }
+      if (changed) {
+        quill.update('silent');
+        if (selection) quill.setSelection(selection, 'silent');
+      }
+      quill.getModule('cursors')?.update();
     });
   }
   awareness.on('change', renderCompositionPreviews);

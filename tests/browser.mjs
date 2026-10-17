@@ -11,6 +11,7 @@ const port = 5124;
 let logs = '';
 let server;
 let browser;
+const extraBrowsers = [];
 const errors = [];
 const results = [];
 function startServer() {
@@ -35,6 +36,7 @@ async function synced(pages) {
   return expected;
 }
 async function check(name, fn) {
+  if (process.env.TEST_FILTER && !new RegExp(process.env.TEST_FILTER).test(name)) return;
   const started = Date.now();
   await fn();
   results.push({ name, ms: Date.now() - started });
@@ -122,13 +124,13 @@ try {
     await a.evaluate(() => { quill.focus(); quill.setSelection(quill.getLength() - 1, 0); });
     const input = await browser.newCDPSession(a);
     await input.send('Input.imeSetComposition', { text: 'ㄓㄨㄥ', selectionStart: 3, selectionEnd: 3 });
-    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄓㄨㄥ'));
+    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('ㄓㄨㄥ'));
     assert(!(await content(b)).includes('ㄓㄨㄥ'));
     assert(!(await content(viewer)).includes('ㄓㄨㄥ'));
     assert.equal(await viewer.locator('.remote-ime-preview').count(), 0);
     assert.equal(await a.locator('.remote-ime-preview').count(), 0);
     await input.send('Input.imeSetComposition', { text: 'ㄓㄨㄥˋ', selectionStart: 4, selectionEnd: 4 });
-    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄓㄨㄥˋ'));
+    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('ㄓㄨㄥˋ'));
     await b.evaluate(() => quill.insertText(0, '選字時校正', 'user'));
     await delay(250);
     assert(!(await content(a)).includes('選字時校正'));
@@ -145,12 +147,92 @@ try {
     const before = await content(b);
     const input = await browser.newCDPSession(a);
     await input.send('Input.imeSetComposition', { text: 'ㄅㄆㄇ', selectionStart: 3, selectionEnd: 3 });
-    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄅㄆㄇ'));
+    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('ㄅㄆㄇ'));
     await input.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 });
     await b.waitForFunction(() => !document.querySelector('.remote-ime-preview'));
     await synced(pages);
     assert.equal(await content(b), before);
     await input.detach();
+  });
+  await check('uncommitted middle-of-sentence Zhuyin reflows following text without changing document or undo', async () => {
+    const x = await browser.newPage(), y = await browser.newPage();
+    await Promise.all([x.goto(`${base}/edit/INLINE`), y.goto(`${base}/edit/INLINE`)]);
+    await synced([x,y]);
+    await x.evaluate(() => quill.insertText(0, '今天我們一起開會。', 'user'));
+    await synced([x,y]);
+    const before = await y.evaluate(() => ({text:quill.getText(), delta:quill.getContents(),
+      length:quill.getLength(), bounds:quill.getBounds(4,1), undo:collaboration.undo.undoStack.length}));
+    await x.bringToFront();
+    await x.evaluate(() => {quill.focus();quill.setSelection(4,0);});
+    const input = await browser.newCDPSession(x);
+    await input.send('Input.imeSetComposition',{text:'ㄓㄨㄥ',selectionStart:3,selectionEnd:3});
+    await y.waitForFunction(() => document.querySelector('.ql-editor .remote-ime-preview')?.dataset.preview==='ㄓㄨㄥ');
+    const during = await y.evaluate(() => ({text:quill.getText(), delta:quill.getContents(),
+      length:quill.getLength(), bounds:quill.getBounds(4,1), undo:collaboration.undo.undoStack.length,
+      css:getComputedStyle(document.querySelector('.remote-ime-preview'),'::before').content,
+      size:getComputedStyle(document.querySelector('.remote-ime-preview')).fontSize,
+      editorSize:getComputedStyle(quill.root).fontSize, html:quill.getSemanticHTML()}));
+    assert.equal(during.text,before.text);
+    assert.deepEqual(during.delta,before.delta);
+    assert.equal(during.length,before.length);
+    assert.equal(during.undo,before.undo);
+    assert(during.bounds.left>before.bounds.left+90,'following character must actually move in text flow');
+    assert(during.css.includes('ㄓㄨㄥ'));
+    assert.equal(during.size,during.editorSize);
+    assert(!during.html.includes('ㄓㄨㄥ') && !during.html.includes('remote-ime-preview'));
+    await y.screenshot({path:resolve(dir,'inline-preedit.png')});
+    await input.send('Input.imeSetComposition',{text:'',selectionStart:0,selectionEnd:0});
+    await y.waitForFunction(() => !document.querySelector('.remote-ime-preview'));
+    await synced([x,y]);
+    const after=await y.evaluate(() => ({text:quill.getText(),bounds:quill.getBounds(4,1)}));
+    assert.equal(after.text,before.text);
+    assert(Math.abs(after.bounds.left-before.bounds.left)<1,'cancel restores original layout');
+    await input.detach();await x.close();await y.close();
+  });
+  await check('real partner typing and deletion through inline preedit preserve cursor and converge', async () => {
+    const peerBrowser=await chromium.launch({channel:process.env.BROWSER_CHANNEL || 'chrome',headless:true});
+    extraBrowsers.push(peerBrowser);
+    const x=await browser.newPage(),y=await peerBrowser.newPage({viewport:{width:1365,height:900}});
+    await Promise.all([x.goto(`${base}/edit/INLINEEDIT`),y.goto(`${base}/edit/INLINEEDIT`)]);
+    await synced([x,y]);
+    await x.evaluate(() => quill.insertText(0,'今天我們一起開會。','user'));
+    await synced([x,y]);
+    await x.bringToFront();await x.evaluate(() => {quill.focus();quill.setSelection(4,0);});
+    const input=await browser.newCDPSession(x);
+    await input.send('Input.imeSetComposition',{text:'ㄓㄨㄥ',selectionStart:3,selectionEnd:3});
+    await y.waitForFunction(() => document.querySelector('.ql-editor .remote-ime-preview'));
+    await y.bringToFront();await y.evaluate(() => {quill.focus();quill.setSelection(7,0);});
+    await y.keyboard.type('B');
+    assert.equal(await y.evaluate(() => quill.getSelection().index),8);
+    assert.equal(await content(y),'今天我們一起開B會。\n');
+    await y.evaluate(() => quill.setSelection(2,4));
+    await y.keyboard.press('Backspace');
+    assert.equal(await y.evaluate(() => quill.getSelection().index),2);
+    await input.send('Input.insertText',{text:'中'});
+    const value=await synced([x,y]);
+    assert(value.includes('中') && value.includes('B') && !value.includes('ㄓㄨㄥ'),JSON.stringify(value));
+    assert.equal(await y.locator('.remote-ime-preview').count(),0);
+    await input.detach();await x.close();await peerBrowser.close();
+  });
+  await check('inline preedit at empty paragraph allows partner to type and undo normally', async () => {
+    const peerBrowser=await chromium.launch({channel:process.env.BROWSER_CHANNEL || 'chrome',headless:true});
+    extraBrowsers.push(peerBrowser);
+    const x=await browser.newPage(),y=await peerBrowser.newPage();
+    await Promise.all([x.goto(`${base}/edit/INLINEEMPTY`),y.goto(`${base}/edit/INLINEEMPTY`)]);
+    await synced([x,y]);
+    await x.bringToFront();await x.evaluate(() => {quill.focus();quill.setSelection(0,0);});
+    const input=await browser.newCDPSession(x);
+    await input.send('Input.imeSetComposition',{text:'ㄅㄆㄇ',selectionStart:3,selectionEnd:3});
+    await y.waitForFunction(() => document.querySelector('.ql-editor .remote-ime-preview'));
+    await y.bringToFront();await y.evaluate(() => {quill.focus();quill.setSelection(0,0);});
+    await y.keyboard.type('abc');
+    assert.equal(await y.evaluate(() => quill.getSelection().index),3);
+    assert.equal(await content(y),'abc\n');
+    await y.keyboard.press('Control+z');
+    assert.equal(await content(y),'\n');
+    await input.send('Input.imeSetComposition',{text:'',selectionStart:0,selectionEnd:0});
+    assert.equal(await synced([x,y]),'\n');
+    await input.detach();await x.close();await peerBrowser.close();
   });
   await check('continuous rapid composition updates cannot starve partner preview', async () => {
     await a.evaluate(() => {
@@ -162,7 +244,7 @@ try {
       }, 5);
     });
     try {
-      await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄓㄨㄥ'), null, {timeout: 1500, polling: 20});
+      await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('ㄓㄨㄥ'), null, {timeout: 1500, polling: 20});
     } finally {
       await a.evaluate(() => {
         clearInterval(window.fastCompositionTimer);
@@ -178,7 +260,7 @@ try {
       quill.root.dispatchEvent(new CompositionEvent('compositionstart'));
       quill.root.dispatchEvent(new CompositionEvent('compositionupdate', {data:'<img src=x onerror=alert(1)>ㄓ'}));
     });
-    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('<img'));
+    await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('<img'));
     assert.equal(await b.locator('.remote-ime-preview img').count(), 0);
     await c.evaluate(() => {
       quill.focus(); quill.setSelection(5, 0);
@@ -186,9 +268,9 @@ try {
       quill.root.dispatchEvent(new CompositionEvent('compositionupdate', {data:'ㄅㄆ'}));
     });
     await b.waitForFunction(() => document.querySelectorAll('.remote-ime-preview').length === 2);
-    const before = await b.locator('.remote-ime-preview').first().evaluate(el => el.style.left);
+    const before = await b.locator('.remote-ime-preview').first().evaluate(el => el.getBoundingClientRect().left);
     await b.evaluate(() => quill.insertText(0, '前補', 'user'));
-    await b.waitForFunction(before => document.querySelector('.remote-ime-preview').style.left !== before, before);
+    await b.waitForFunction(before => document.querySelector('.remote-ime-preview').getBoundingClientRect().left !== before, before);
     await a.evaluate(() => socket.disconnect());
     await b.waitForFunction(() => document.querySelectorAll('.remote-ime-preview').length === 1);
     await a.evaluate(() => { quill.root.dispatchEvent(new CompositionEvent('compositionend')); socket.connect(); });
@@ -204,7 +286,7 @@ try {
       quill.root.dispatchEvent(new CompositionEvent('compositionupdate', {data:'ㄓㄨㄥ'}));
     });
     try {
-      await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄓㄨㄥ'), null, {timeout:1500,polling:20});
+      await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('ㄓㄨㄥ'), null, {timeout:1500,polling:20});
       assert((await content(b)).includes('剛完成'));
       assert(!(await content(b)).includes('ㄓㄨㄥ'));
     } finally {
@@ -258,7 +340,7 @@ try {
       quill.root.dispatchEvent(new CompositionEvent('compositionupdate',{data:'ㄒㄧㄣ'}));
     });
     await b.waitForFunction(()=>quill.getText().includes('接續完成'));
-    await b.waitForFunction(()=>document.querySelector('.remote-ime-preview')?.textContent.includes('ㄒㄧㄣ'));
+    await b.waitForFunction(()=>document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('ㄒㄧㄣ'));
     assert(!(await content(b)).includes('ㄒㄧㄣ'));
     await a.evaluate(()=>quill.root.dispatchEvent(new CompositionEvent('compositionend')));
     await synced(pages);
@@ -278,7 +360,7 @@ try {
       }, domFallback);
       const input = await browser.newCDPSession(a);
       await input.send('Input.imeSetComposition', {text:'ㄅㄆㄇ',selectionStart:3,selectionEnd:3});
-      await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.textContent.includes('ㄅㄆㄇ'));
+      await b.waitForFunction(() => document.querySelector('.remote-ime-preview')?.dataset.preview?.includes('ㄅㄆㄇ'));
       const source = await a.locator('#imePreviewStatus').getAttribute('data-source');
       assert.equal(source, domFallback ? 'input-dom' : 'input');
       assert(!(await content(b)).includes('ㄅㄆㄇ'));
@@ -470,6 +552,7 @@ try {
   console.error('BROWSER ERRORS', errors);
   process.exitCode = 1;
 } finally {
+  await Promise.all(extraBrowsers.map(item => item.close()));
   if (browser) await browser.close();
   if (server) server.kill();
 }
