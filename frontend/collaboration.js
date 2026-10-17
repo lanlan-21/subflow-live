@@ -37,6 +37,7 @@ const decode = data => Uint8Array.from(atob(data), char => char.charCodeAt(0));
 window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {}, onComposition = () => {}, onPeerComposition = () => {} }) {
   const doc = new Y.Doc(); // A new ID for every document instance, including each tab.
   const text = doc.getText('text');
+  const imeCommits = doc.getMap('imeCommits');
   const awareness = new Awareness(doc);
   const network = Symbol('network');
   let composing = false;
@@ -141,13 +142,13 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       if (draft || current !== compositionOriginal) publishComposition(draft, 'input-dom');
     }
   });
-  quill.root.addEventListener('compositionend', () => {
+  quill.root.addEventListener('compositionend', event => {
     if (readOnly) return;
     const currentComposition = compositionGeneration;
     compositionEnding = true;
-    awareness.setLocalStateField('compositionPreview', null);
+    const preview = awareness.getLocalState()?.compositionPreview;
+    const finalText = typeof event.data === 'string' ? event.data.slice(0, 160) : '';
     onComposition({ active: false, events: { ...compositionEvents } });
-    sendPresence();
     // Quill commits the final IME mutation before remote changes are applied.
     setTimeout(() => {
       if (currentComposition !== compositionGeneration) return;
@@ -156,13 +157,25 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       compositionEnding = false;
       compositionAnchor = null;
       compositionSafeUpdates.clear();
+      // A numeric marker shares the document update with inserts AND deletes.
+      // A state vector alone cannot fence deletion-only replacements.
+      if (finalText && preview) imeCommits.set(String(doc.clientID), currentComposition);
+      // Presence is faster than document saves. Retire the inline preedit only
+      // once the receiver has this exact committed CRDT state, never on Enter
+      // alone. Send this fence before flushing the corresponding document update.
+      awareness.setLocalStateField('compositionCommit', finalText && preview ? {
+        client: doc.clientID, sequence: currentComposition,
+        preview: { anchor: preview.anchor, text: finalText }
+      } : awareness.getLocalState()?.compositionCommit || null);
+      awareness.setLocalStateField('compositionPreview', null);
+      awareness.setLocalStateField('composing', false);
+      sendPresence();
       const queue = remoteQueue;
       remoteQueue = [];
       doc.transact(() => queue.forEach(update => Y.applyUpdate(doc, update, network)), network);
-      awareness.setLocalStateField('composing', false);
       renderCompositionPreviews();
       undo.stopCapturing();
-      schedule();
+      schedule(0);
     }, 0);
   });
   quill.root.addEventListener('blur', () => {
@@ -175,7 +188,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   const previewNodes = new Map();
   if (!readOnly) {
     const style = document.createElement('style');
-    style.textContent = '.remote-ime-preview{display:inline;pointer-events:none;user-select:none;-webkit-user-select:none;background:color-mix(in srgb,var(--peer-color) 16%,transparent);border-bottom:2px dotted var(--peer-color);font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}.remote-ime-preview::before{content:attr(data-preview)}';
+    style.textContent = '.remote-ime-preview{display:inline;pointer-events:none;user-select:none;-webkit-user-select:none;background:transparent;border:0;padding:0;box-shadow:none;color:inherit;font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}.remote-ime-preview::before{content:attr(data-preview)}';
     document.head.append(style);
   }
   let previewFrame;
@@ -193,9 +206,14 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     // This view is independent of anchors and each collaborator's scroll position.
     onPeerComposition(peers, { versions });
   }
-  function renderCompositionPreviews() {
-    if (readOnly || previewFrame) return;
-    previewFrame = requestAnimationFrame(() => {
+  function renderCompositionPreviews(immediate = false) {
+    if (readOnly) return;
+    if (immediate === true) {
+      if (previewFrame) cancelAnimationFrame(previewFrame);
+      drawCompositionPreviews();
+    } else if (!previewFrame) previewFrame = requestAnimationFrame(drawCompositionPreviews);
+  }
+  function drawCompositionPreviews() {
       previewFrame = null;
       // Never split or remove DOM nodes underneath this user's native IME.
       // The independent status still receives presence during local composition.
@@ -204,9 +222,17 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       const selection = quill.hasFocus() ? quill.getSelection() : null;
       let changed = false;
       awareness.getStates().forEach((state, id) => {
-        if (id === doc.clientID || !state.composing || !state.compositionPreview) return;
+        if (id === doc.clientID) return;
         try {
-          const preview = state.compositionPreview;
+          let preview = state.composing ? state.compositionPreview : null;
+          if (state.compositionCommit) {
+            const { client, sequence } = state.compositionCommit;
+            if (Number.isSafeInteger(client) && Number.isSafeInteger(sequence) &&
+                (imeCommits.get(String(client)) || 0) < sequence) {
+              preview = state.compositionCommit.preview;
+            }
+          }
+          if (!preview) return;
           const anchor = Y.createAbsolutePositionFromRelativePosition(Y.createRelativePositionFromJSON(preview.anchor), doc);
           if (!anchor || anchor.type !== text) return;
           const draft = typeof preview.text === 'string' ? preview.text.slice(0, 160) : '';
@@ -231,7 +257,6 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
           const name = String(state.user?.name || '夥伴').slice(0, 40);
           if (node.dataset.preview !== draft) node.dataset.preview = draft;
           node.setAttribute('aria-label', `${name}正在組字：${draft}`);
-          node.style.setProperty('--peer-color', /^#[0-9a-f]{6}$/i.test(state.user?.color) ? state.user.color : '#38bdf8');
         } catch { /* A deleted or malformed anchor has no safe preview position. */ }
       });
       for (const [id, blot] of previewNodes) {
@@ -242,8 +267,12 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
         if (selection) quill.setSelection(selection, 'silent');
       }
       quill.getModule('cursors')?.update();
-    });
   }
+  // Yjs observers have already updated Quill here. Remove a completed preview
+  // in the same JavaScript task, before a frame can paint both copies.
+  doc.on('afterTransaction', transaction => {
+    if (transaction.origin === network) renderCompositionPreviews(true);
+  });
   awareness.on('change', renderCompositionPreviews);
   awareness.on('change', notifyPeerCompositions);
   quill.on('editor-change', renderCompositionPreviews);

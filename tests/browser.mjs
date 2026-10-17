@@ -214,6 +214,49 @@ try {
     assert.equal(await y.locator('.remote-ime-preview').count(),0);
     await input.detach();await x.close();await peerBrowser.close();
   });
+  await check('Enter hands off plain preedit to committed text without a blank or duplicate frame under latency', async () => {
+    const peerBrowser=await chromium.launch({channel:process.env.BROWSER_CHANNEL || 'chrome',headless:true});
+    extraBrowsers.push(peerBrowser);
+    const x=await browser.newPage(),y=await peerBrowser.newPage({viewport:{width:1365,height:900}});
+    await Promise.all([x.goto(`${base}/edit/HANDOFF`),y.goto(`${base}/edit/HANDOFF`)]);
+    await synced([x,y]);
+    await x.evaluate(()=>quill.insertText(0,'甲尾字','user'));
+    await synced([x,y]);
+    await x.evaluate(()=>{quill.focus();quill.setSelection(1,0);});
+    const input=await browser.newCDPSession(x);
+    await input.send('Input.imeSetComposition',{text:'中',selectionStart:1,selectionEnd:1});
+    await y.waitForFunction(()=>document.querySelector('.remote-ime-preview')?.dataset.preview==='中');
+    const style=await y.locator('.remote-ime-preview').evaluate(el=>({background:getComputedStyle(el).backgroundColor,border:getComputedStyle(el).borderBottomWidth,color:getComputedStyle(el).color,parentColor:getComputedStyle(el.parentNode).color}));
+    assert.equal(style.background,'rgba(0, 0, 0, 0)');assert.equal(style.border,'0px');assert.equal(style.color,style.parentColor);
+    await y.evaluate(()=>{
+      const handler=socket.listeners('document_update')[0];
+      socket.off('document_update',handler);
+      socket.on('document_update',data=>setTimeout(()=>handler(data),450));
+      window.handoffFrames=[];
+      window.sampleHandoff=()=>{
+        const draft=[...document.querySelectorAll('.remote-ime-preview')].map(el=>el.dataset.preview).join('');
+        const count=((quill.getText()+draft).match(/中/g)||[]).length;
+        const tail=quill.getBounds(quill.getText().indexOf('尾'),1).left;
+        window.handoffFrames.push({count,tail});
+      };
+      window.sampleHandoff();
+      window.handoffTimer=setInterval(window.sampleHandoff,10);
+      window.handoffRaf=()=>{window.sampleHandoff();window.handoffFrame=requestAnimationFrame(window.handoffRaf);};
+      window.handoffFrame=requestAnimationFrame(window.handoffRaf);
+    });
+    await input.send('Input.insertText',{text:'中'});
+    await y.waitForFunction(()=>[...collaboration.awareness.getStates().values()].some(s=>s.compositionCommit&&!s.composing));
+    assert.equal(await content(y),'甲尾字\n','formal update intentionally still delayed');
+    assert.equal(await y.locator('.remote-ime-preview').getAttribute('data-preview'),'中','keep preview until matching state arrives');
+    await y.waitForFunction(()=>quill.getText()==='甲中尾字\n'&&!document.querySelector('.remote-ime-preview'));
+    await delay(120);
+    const frames=await y.evaluate(()=>{clearInterval(window.handoffTimer);cancelAnimationFrame(window.handoffFrame);return window.handoffFrames;});
+    assert(frames.length>15);
+    assert(frames.every(f=>f.count===1),'no sampled frame may be blank or show duplicate committed text');
+    assert(frames.every(f=>Math.abs(f.tail-frames[0].tail)<1),'following text must not jump during handoff');
+    await y.screenshot({path:resolve(dir,'plain-committed.png')});
+    await input.detach();await x.close();await peerBrowser.close();
+  });
   await check('inline preedit at empty paragraph allows partner to type and undo normally', async () => {
     const peerBrowser=await chromium.launch({channel:process.env.BROWSER_CHANNEL || 'chrome',headless:true});
     extraBrowsers.push(peerBrowser);
@@ -232,6 +275,33 @@ try {
     assert.equal(await content(y),'\n');
     await input.send('Input.imeSetComposition',{text:'',selectionStart:0,selectionEnd:0});
     assert.equal(await synced([x,y]),'\n');
+    await input.detach();await x.close();await peerBrowser.close();
+  });
+  await check('starting the next IME session does not erase a previous commit still in transit', async () => {
+    const peerBrowser=await chromium.launch({channel:process.env.BROWSER_CHANNEL || 'chrome',headless:true});
+    extraBrowsers.push(peerBrowser);
+    const x=await browser.newPage(),y=await peerBrowser.newPage();
+    await Promise.all([x.goto(`${base}/edit/NEXTHANDOFF`),y.goto(`${base}/edit/NEXTHANDOFF`)]);
+    await synced([x,y]);await x.evaluate(()=>quill.insertText(0,'甲尾字','user'));await synced([x,y]);
+    await x.evaluate(()=>{quill.focus();quill.setSelection(1,0);});
+    const input=await browser.newCDPSession(x);
+    await input.send('Input.imeSetComposition',{text:'中',selectionStart:1,selectionEnd:1});
+    await y.waitForFunction(()=>document.querySelector('.remote-ime-preview')?.dataset.preview==='中');
+    await y.evaluate(()=>{
+      const handler=socket.listeners('document_update')[0];socket.off('document_update',handler);
+      socket.on('document_update',data=>setTimeout(()=>handler(data),600));
+    });
+    await input.send('Input.insertText',{text:'中'});
+    await y.waitForFunction(()=>[...collaboration.awareness.getStates().values()].some(s=>s.compositionCommit&&!s.composing));
+    await x.evaluate(()=>quill.setSelection(2,0));
+    await input.send('Input.imeSetComposition',{text:'ㄅ',selectionStart:1,selectionEnd:1});
+    await y.waitForFunction(()=>[...collaboration.awareness.getStates().values()].some(s=>s.composing&&s.compositionPreview?.text==='ㄅ'));
+    assert.equal(await content(y),'甲尾字\n');
+    assert.equal(await y.locator('.remote-ime-preview').getAttribute('data-preview'),'中');
+    await y.waitForFunction(()=>quill.getText()==='甲中尾字\n'&&document.querySelector('.remote-ime-preview')?.dataset.preview==='ㄅ');
+    await input.send('Input.imeSetComposition',{text:'',selectionStart:0,selectionEnd:0});
+    assert.equal(await synced([x,y]),'甲中尾字\n');
+    await y.waitForFunction(()=>!document.querySelector('.remote-ime-preview'));
     await input.detach();await x.close();await peerBrowser.close();
   });
   await check('continuous rapid composition updates cannot starve partner preview', async () => {
