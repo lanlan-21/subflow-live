@@ -28,6 +28,7 @@
       transition: background 0.2s ease, color 0.2s ease;
     }
     #viewerContainer { position: relative; flex: 1; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden; }
+    .compact-reading #viewerContainer { margin-bottom: 60px; }
 
     .ql-toolbar { display: none !important; }
     .ql-container.ql-snow { border: none !important; font-family: inherit; font-size: inherit; height: auto; }
@@ -64,7 +65,7 @@
     #localScaleHint { color: #e2e8f0; font-size: 12px; margin-left: 4px; min-width: 48px; }
   </style>
 </head>
-<body>
+<body class="compact-reading">
   <div id="viewerContainer">
     <div id="editor">等待聽打員連線...</div>
   </div>
@@ -136,7 +137,7 @@
       const finalFontSize = (baseFontSize * localViewerScale) + 'px';
 
       qlEditor.style.fontSize = finalFontSize;
-      qlEditor.style.padding = `${py} ${px} 76px ${px}`;
+      qlEditor.style.padding = `${py} ${px} 24px ${px}`;
       document.getElementById('localScaleHint').textContent = Math.round(baseFontSize * localViewerScale) + 'px';
       scheduleFollow();
     }
@@ -214,6 +215,7 @@
     function showToolbar(show) {
       viewerFooter.hidden = !show;
       quickActions.hidden = show;
+      document.body.classList.toggle('compact-reading', !show);
       showToolbarButton.setAttribute('aria-expanded', String(show));
       scheduleFollow();
     }

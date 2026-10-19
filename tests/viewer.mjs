@@ -231,10 +231,11 @@ try {
       const metrics=await reader.evaluate(()=>{
         const last=quill.getText().trimEnd().length-1;
         return {lastBottom:document.getElementById('editor').getBoundingClientRect().top+quill.getBounds(last,1).bottom,
-          actions:document.getElementById('viewerQuickActions').getBoundingClientRect().toJSON(),overflow:document.documentElement.scrollWidth>innerWidth};
+          actions:document.getElementById('viewerQuickActions').getBoundingClientRect().toJSON(),containerBottom:document.getElementById('viewerContainer').getBoundingClientRect().bottom,overflow:document.documentElement.scrollWidth>innerWidth};
       });
       assert(!metrics.overflow);
       assert(metrics.actions.left>=0&&metrics.actions.right<=size.width);
+      assert(metrics.containerBottom<=metrics.actions.top-5,'controls must not overlap any visible subtitle line');
       assert(metrics.lastBottom<metrics.actions.top-5,JSON.stringify({size,metrics}));
       assert(await reader.locator('#viewerFooter').isHidden());
     }
