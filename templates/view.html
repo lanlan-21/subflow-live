@@ -54,7 +54,8 @@
     .btn-viewer-reset { background: #0284c7; border-color: #0369a1; }
     .btn-viewer-reset:hover { background: #0369a1; }
     [hidden] { display: none !important; }
-    #showViewerToolbar { position: fixed; right: calc(8px + var(--safe-right)); bottom: calc(8px + var(--safe-bottom)); z-index: 200; opacity: 0.9; }
+    #viewerQuickActions { position: fixed; right: calc(8px + var(--safe-right)); bottom: calc(8px + var(--safe-bottom)); z-index: 200; display: flex; gap: 6px; max-width: calc(100vw - 16px - var(--safe-left) - var(--safe-right)); }
+    #readingConnectionStatus { position: fixed; left: calc(8px + var(--safe-left)); bottom: calc(60px + var(--safe-bottom)); z-index: 190; max-width: calc(100vw - 16px - var(--safe-left) - var(--safe-right)); padding: 5px 8px; border-radius: 6px; background: #111827; color: #f8fafc; font: 14px/1.4 system-ui,sans-serif; }
     #mobileViewingHelp { color: #f8fafc; background: #111827; border: 1px solid #64748b; border-radius: 12px; padding: 20px;
       width: 440px; max-width: calc(100vw - 32px - var(--safe-left) - var(--safe-right));
       max-height: calc(100dvh - 32px - var(--safe-top) - var(--safe-bottom)); overflow-y: auto; font: 16px/1.6 system-ui, sans-serif; }
@@ -68,8 +69,12 @@
     <div id="editor">等待聽打員連線...</div>
   </div>
 
-  <button id="showViewerToolbar" class="btn-viewer" hidden type="button" aria-controls="viewerFooter">顯示工具列</button>
-  <footer id="viewerFooter" aria-label="觀眾閱讀設定">
+  <div id="viewerQuickActions" aria-label="觀看操作">
+    <button id="quickFullscreenButton" class="btn-viewer" type="button">全螢幕</button>
+    <button id="showViewerToolbar" class="btn-viewer" type="button" aria-controls="viewerFooter" aria-expanded="false" aria-label="顯示閱讀設定">設定</button>
+  </div>
+  <span id="readingConnectionStatus" role="status">連線中…</span>
+  <footer id="viewerFooter" hidden aria-label="觀眾閱讀設定">
   <div id="viewerControls">
     <button class="btn-viewer" onclick="stepLocalScale(0.1)" title="放大視角" aria-label="放大文字">A+</button>
     <button class="btn-viewer" onclick="stepLocalScale(-0.1)" title="縮小視角" aria-label="縮小文字">A-</button>
@@ -87,11 +92,11 @@
   </footer>
 
   <dialog id="mobileViewingHelp" aria-labelledby="mobileViewingTitle">
-    <h2 id="mobileViewingTitle">手機大畫面觀看</h2>
-    <p>iPhone 若無法直接全螢幕，可將這個觀眾頁加入主畫面，以獨立網頁 App 開啟，減少瀏覽器工具列占用。</p>
-    <ol><li>使用 Safari 開啟目前的觀眾連結。</li><li>按「分享」→「加入主畫面」。若有「作為網頁 App 開啟」，請保持開啟。</li><li>從主畫面的圖示進入，再橫放手機觀看。</li></ol>
-    <p>臨時觀看也可按「展開閱讀」隱藏本站工具列；右下角「顯示工具列」可找回操作。</p>
-    <button id="expandReadingButton" class="btn-viewer" type="button">展開閱讀</button>
+    <h2 id="mobileViewingTitle">最大閱讀範圍</h2>
+    <p>字幕已使用瀏覽器可提供的閱讀範圍。這個瀏覽器未提供或未允許網頁全螢幕，網址列由瀏覽器控制。</p>
+    <p>若使用 iPhone Safari，可開啟網址列的「頁面選單」，選擇「隱藏工具列」（選單依版本可能不同）。不需要安裝任何東西。</p>
+    <p>可橫放裝置觀看；右下角「設定」可調整字級或恢復跟隨。</p>
+    <button id="expandReadingButton" class="btn-viewer" type="button">繼續觀看字幕</button>
     <button id="closeMobileHelp" class="btn-viewer" type="button">關閉說明</button>
   </dialog>
   <script>
@@ -131,7 +136,7 @@
       const finalFontSize = (baseFontSize * localViewerScale) + 'px';
 
       qlEditor.style.fontSize = finalFontSize;
-      qlEditor.style.padding = `${py} ${px} 24px ${px}`;
+      qlEditor.style.padding = `${py} ${px} 76px ${px}`;
       document.getElementById('localScaleHint').textContent = Math.round(baseFontSize * localViewerScale) + 'px';
       scheduleFollow();
     }
@@ -188,8 +193,16 @@
     const collaboration = createCollaboration({
       quill, socket, room: roomId, readOnly: true,
       onPreviewChange: scheduleFollow,
+      onProjection: data => { projection = data; scheduleFollow(); },
       onSettings: settings => { masterSettings = settings; applyCombinedSettings(); },
-      onStatus: status => { document.getElementById('viewerStatus').textContent = status; if (status.startsWith('已同步')) socket.emit('request_projection'); }
+      onStatus: status => {
+        document.getElementById('viewerStatus').textContent = status;
+        const healthy = status.startsWith('已同步') || status === '所有修改已儲存';
+        const readingStatus = document.getElementById('readingConnectionStatus');
+        readingStatus.hidden = healthy;
+        readingStatus.textContent = healthy ? '' : status;
+        if (status.startsWith('已同步')) socket.emit('request_projection');
+      }
     });
     quill.on('text-change', () => {
       scheduleFollow();
@@ -197,37 +210,45 @@
 
     const viewerFooter = document.getElementById('viewerFooter');
     const showToolbarButton = document.getElementById('showViewerToolbar');
+    const quickActions = document.getElementById('viewerQuickActions');
     function showToolbar(show) {
       viewerFooter.hidden = !show;
-      showToolbarButton.hidden = show;
+      quickActions.hidden = show;
+      showToolbarButton.setAttribute('aria-expanded', String(show));
       scheduleFollow();
     }
     document.getElementById('hideViewerToolbar').addEventListener('click', () => showToolbar(false));
     showToolbarButton.addEventListener('click', () => showToolbar(true));
     const fullscreenButton = document.getElementById('fullscreenButton');
+    const quickFullscreenButton = document.getElementById('quickFullscreenButton');
     const mobileHelp = document.getElementById('mobileViewingHelp');
     const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-    const nativeFullscreen = document.fullscreenEnabled && typeof document.documentElement.requestFullscreen === 'function';
-    if (standalone) fullscreenButton.textContent = '展開閱讀';
-    else if (!nativeFullscreen) fullscreenButton.textContent = '手機大畫面';
+    const fullscreen = createViewerFullscreen();
+    function updateFullscreenControls() {
+      const label = fullscreen.active ? '離開全螢幕' : standalone ? '展開閱讀' : fullscreen.supported ? '全螢幕' : '放大觀看';
+      fullscreenButton.textContent = quickFullscreenButton.textContent = label;
+      quickFullscreenButton.hidden = standalone;
+    }
+    updateFullscreenControls();
     document.getElementById('closeMobileHelp').addEventListener('click', () => mobileHelp.close());
     document.getElementById('expandReadingButton').addEventListener('click', () => { mobileHelp.close(); showToolbar(false); });
-    fullscreenButton.addEventListener('click', async () => {
+    async function toggleViewerFullscreen() {
       if (standalone) { showToolbar(false); return; }
-      if (!nativeFullscreen) { mobileHelp.showModal(); return; }
+      if (!fullscreen.supported) { mobileHelp.showModal(); return; }
       try {
-        if (document.fullscreenElement) await document.exitFullscreen();
-        else if (document.documentElement.requestFullscreen) {
-          await document.documentElement.requestFullscreen();
-          showToolbar(false);
-        } else mobileHelp.showModal();
+        if (fullscreen.active) await fullscreen.exit();
+        else await fullscreen.enter();
+        showToolbar(false);
       } catch { mobileHelp.showModal(); }
-    });
-    document.addEventListener('fullscreenchange', () => {
-      fullscreenButton.textContent = document.fullscreenElement ? '離開全螢幕' : standalone ? '展開閱讀' : nativeFullscreen ? '全螢幕' : '手機大畫面';
-      if (!document.fullscreenElement) showToolbar(true);
+    }
+    fullscreenButton.addEventListener('click', toggleViewerFullscreen);
+    quickFullscreenButton.addEventListener('click', toggleViewerFullscreen);
+    function fullscreenChanged() {
+      updateFullscreenControls();
       scheduleFollow();
-    });
+    }
+    document.addEventListener('fullscreenchange', fullscreenChanged);
+    document.addEventListener('webkitfullscreenchange', fullscreenChanged);
 
     const wakeStatus = document.getElementById('wakeLockStatus');
     const wakeSupported = window.isSecureContext && 'wakeLock' in navigator;

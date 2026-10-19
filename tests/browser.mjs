@@ -265,6 +265,7 @@ try {
     const x=await browser.newPage(),y=await peerBrowser.newPage();
     await Promise.all([x.goto(`${base}/edit/INLINEEMPTY`),y.goto(`${base}/edit/INLINEEMPTY`)]);
     await synced([x,y]);
+    await Promise.all([x.evaluate(()=>document.fonts.ready),y.evaluate(()=>document.fonts.ready)]);
     await x.bringToFront();await x.evaluate(() => {quill.focus();quill.setSelection(0,0);});
     const input=await browser.newCDPSession(x);
     await input.send('Input.imeSetComposition',{text:'ㄅㄆㄇ',selectionStart:3,selectionEnd:3});
@@ -597,7 +598,7 @@ try {
   await check('partner version mismatch is visible instead of silently using an old editor', async () => {
     await b.evaluate(() => collaboration.awareness.setLocalStateField('clientVersion','old-test-version'));
     await a.waitForFunction(() => document.getElementById('peerImeStatus').dataset.outdated==='true');
-    assert((await a.locator('#peerImeStatus').innerText()).includes('舊版'));
+    assert((await a.locator('#peerImeStatus').innerText()).includes('不同介面版本'));
     const health=await (await fetch(base+'/healthz')).json();
     await b.evaluate(version => collaboration.awareness.setLocalStateField('clientVersion',version),health.asset_version);
     await a.waitForFunction(() => document.getElementById('peerImeStatus').dataset.outdated==='false');

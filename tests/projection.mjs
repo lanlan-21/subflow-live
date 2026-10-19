@@ -38,13 +38,13 @@ try {
     const before=await viewer.locator('#viewerContainer').evaluate(e=>e.scrollTop);
     await move(editor,next); await editor.waitForTimeout(400);
     assert.equal(await viewer.locator('#viewerContainer').evaluate(e=>e.scrollTop),before);
-    await viewer.locator('#followMasterButton').click(); await atAnchor(viewer,next);
+    await viewer.locator('#showViewerToolbar').click(); await viewer.locator('#followMasterButton').click(); await viewer.locator('#hideViewerToolbar').click(); await atAnchor(viewer,next);
   });
   await check('reload joins current projection and defaults to following',async()=>{ await viewer.reload(); await viewer.waitForFunction(()=>document.querySelector('.ql-editor').textContent.includes('第099行')); await viewer.evaluate(()=>document.fonts.ready); await atAnchor(viewer,next); });
   await check('master zoom and viewer font zoom keep same text anchor',async()=>{
     await editor.locator('#scaleInput').fill('150'); await editor.locator('#scaleInput').dispatchEvent('change');
     await move(editor,anchor); await atAnchor(viewer,anchor);
-    await viewer.getByRole('button',{name:'放大文字',exact:true}).click(); await atAnchor(viewer,anchor);
+    await viewer.locator('#showViewerToolbar').click(); await viewer.getByRole('button',{name:'放大文字',exact:true}).click(); await viewer.locator('#hideViewerToolbar').click(); await atAnchor(viewer,anchor);
   });
   await check('partner cannot move audience until becoming projection master',async()=>{
     const partner=await desk.newPage(); await partner.goto(base+'/edit/PROJECTION');
@@ -57,12 +57,12 @@ try {
   });
   await check('fullscreen hides toolbar but visible recovery restores controls and exits',async()=>{
     const full=await desk.newPage(); await full.goto(base+'/view/PROJECTION');
-    await full.locator('#fullscreenButton').click();
+    await full.locator('#quickFullscreenButton').click();
     await full.waitForFunction(()=>!!document.fullscreenElement);
     assert(await full.locator('#viewerFooter').isHidden()); assert(await full.locator('#showViewerToolbar').isVisible());
     await full.locator('#showViewerToolbar').click(); assert(await full.locator('#viewerFooter').isVisible());
     await full.locator('#fullscreenButton').click(); await full.waitForFunction(()=>!document.fullscreenElement);
-    assert(await full.locator('#viewerFooter').isVisible()); await full.close();
+    assert(await full.locator('#viewerFooter').isHidden()); assert(await full.locator('#quickFullscreenButton').isVisible()); await full.close();
   });
   assert.deepEqual(errors,[]);
   writeFileSync('../../outputs/projection-tests.json',JSON.stringify({results,errors},null,2));

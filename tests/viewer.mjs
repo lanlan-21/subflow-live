@@ -15,7 +15,7 @@ server.stdout.on('data', d => { logs += d; });
 const results = [];
 let browser;
 const errors = [];
-async function check(name, fn) { await fn(); results.push(name); console.log('PASS', name); }
+async function check(name, fn) { if(process.env.TEST_FILTER&&!new RegExp(process.env.TEST_FILTER).test(name))return; await fn(); results.push(name); console.log('PASS', name); }
 try {
   for (let n = 0; n < 100; n++) {
     try { if ((await fetch(base + '/healthz')).ok) break; } catch {}
@@ -44,8 +44,12 @@ try {
     await page.waitForFunction(() => document.getElementById('wakeLockStatus').dataset.active === 'true');
     assert.equal(await page.evaluate(() => innerWidth), 390);
     assert.equal(await page.locator('.ql-editor').evaluate(el => getComputedStyle(el).fontSize), '60px');
+    assert(await page.locator('#viewerFooter').isHidden());
+    assert(await page.locator('#quickFullscreenButton').isVisible());
+    assert(await page.locator('#showViewerToolbar').isVisible());
   });
   await check('footer and 44px controls fit portrait, landscape and desktop', async () => {
+    await page.locator('#showViewerToolbar').click();
     for (const size of [{width:320,height:568},{width:390,height:844},{width:844,height:390},{width:1280,height:720}]) {
       await page.setViewportSize(size);
       const metrics = await page.evaluate(() => ({ overflow: document.documentElement.scrollWidth > innerWidth, footer: document.getElementById('viewerFooter').getBoundingClientRect().bottom, editor: document.getElementById('viewerContainer').getBoundingClientRect().bottom, top: document.getElementById('viewerFooter').getBoundingClientRect().top, buttons: [...document.querySelectorAll('.btn-viewer')].filter(e => e.getClientRects().length > 0).map(e => e.getBoundingClientRect().height) }));
@@ -69,6 +73,7 @@ try {
     await page.reload();
     await page.waitForFunction(() => document.querySelector('.ql-editor').textContent.includes('👏👏👏👏'));
     assert.equal(await page.locator('.ql-editor').evaluate(el => getComputedStyle(el).fontSize), size);
+    await page.locator('#showViewerToolbar').click();
     await page.getByRole('button', {name:'還原跟隨',exact:true}).click();
     await page.screenshot({path:resolve(output,'觀眾頁手機版驗證.png')});
     await editor.close();
@@ -120,6 +125,7 @@ try {
     await unsupported.close();
   });
   await check('simulated landscape safe area encloses text and controls on both sides', async () => {
+    if (await page.locator('#viewerFooter').isHidden()) await page.locator('#showViewerToolbar').click();
     await page.setViewportSize({width:844,height:390});
     for (const [left,right] of [[59,0],[0,59]]) {
       await page.evaluate(({left,right}) => {
@@ -141,14 +147,16 @@ try {
     await page.evaluate(()=>['--safe-left','--safe-right','--safe-top','--safe-bottom'].forEach(k=>document.documentElement.style.removeProperty(k)));
     await page.setViewportSize({width:390,height:844});
   });
-  await check('unsupported fullscreen offers Home Screen guide and recoverable reading view', async () => {
+  await check('unsupported fullscreen offers browser controls without installation and preserves reading view', async () => {
     const context=await browser.newContext({viewport:{width:390,height:844}});
-    await context.addInitScript(()=>Object.defineProperty(document,'fullscreenEnabled',{value:false}));
+    await context.addInitScript(()=>{Object.defineProperty(document,'fullscreenEnabled',{value:false});Object.defineProperty(document,'webkitFullscreenEnabled',{value:false});Element.prototype.webkitRequestFullscreen=undefined;});
     const phone=await context.newPage(); await phone.goto(base+'/view/VIEWER-QA');
     assert.equal(await phone.locator('meta[name="apple-mobile-web-app-capable"]').getAttribute('content'),'yes');
-    await phone.locator('#fullscreenButton').click();
+    await phone.locator('#quickFullscreenButton').click();
     assert(await phone.locator('#mobileViewingHelp').isVisible());
-    assert((await phone.locator('#mobileViewingHelp').innerText()).includes('加入主畫面'));
+    assert((await phone.locator('#mobileViewingHelp').innerText()).includes('隱藏工具列'));
+    assert(!(await phone.locator('#mobileViewingHelp').innerText()).includes('加入主畫面'));
+    assert.equal(await phone.locator('video,iframe').count(),0);
     await phone.locator('#expandReadingButton').click();
     assert(await phone.locator('#viewerFooter').isHidden());
     assert(await phone.locator('#showViewerToolbar').isVisible());
@@ -160,11 +168,88 @@ try {
     const context=await browser.newContext();
     await context.addInitScript(()=>Object.defineProperty(navigator,'standalone',{value:true}));
     const installed=await context.newPage();await installed.goto(base+'/view/VIEWER-QA');
+    await installed.locator('#showViewerToolbar').click();
     assert.equal(await installed.locator('#fullscreenButton').innerText(),'展開閱讀');
     await installed.locator('#fullscreenButton').click();
     assert(await installed.locator('#viewerFooter').isHidden());
     await installed.locator('#showViewerToolbar').click();
     assert(await installed.locator('#viewerFooter').isVisible());
+    await context.close();
+  });
+  await check('prefixed iPad fullscreen supports direct entry, settings recovery and exit', async () => {
+    const context=await browser.newContext();
+    await context.addInitScript(()=>{
+      Object.defineProperty(document,'fullscreenEnabled',{value:false});
+      Object.defineProperty(document,'webkitFullscreenEnabled',{value:true});
+      window.prefixedRequests=0;
+      Element.prototype.webkitRequestFullscreen=async()=>{
+        prefixedRequests++;
+        Object.defineProperty(document,'webkitFullscreenElement',{configurable:true,value:document.documentElement});
+        document.dispatchEvent(new Event('webkitfullscreenchange'));
+      };
+      document.webkitExitFullscreen=async()=>{
+        Object.defineProperty(document,'webkitFullscreenElement',{configurable:true,value:null});
+        document.dispatchEvent(new Event('webkitfullscreenchange'));
+      };
+    });
+    const tablet=await context.newPage();await tablet.goto(base+'/view/VIEWER-QA');
+    assert.equal(await tablet.evaluate(()=>prefixedRequests),0,'no fullscreen request without viewer gesture');
+    await tablet.locator('#quickFullscreenButton').click();
+    assert.equal(await tablet.evaluate(()=>prefixedRequests),1);
+    assert.equal(await tablet.locator('#quickFullscreenButton').innerText(),'離開全螢幕');
+    await tablet.locator('#showViewerToolbar').click();
+    assert(await tablet.locator('#viewerFooter').isVisible());
+    await tablet.locator('#fullscreenButton').click();
+    assert.equal(await tablet.evaluate(()=>document.webkitFullscreenElement),null);
+    assert(await tablet.locator('#viewerFooter').isHidden());
+    await context.close();
+  });
+  await check('rejected fullscreen stays truthful and needs no installation', async()=>{
+    const context=await browser.newContext();
+    await context.addInitScript(()=>{Element.prototype.requestFullscreen=async()=>{throw new Error('Not permitted');};});
+    const denied=await context.newPage();await denied.goto(base+'/view/VIEWER-QA');
+    await denied.locator('#quickFullscreenButton').click();
+    assert(await denied.locator('#mobileViewingHelp').isVisible());
+    assert(!await denied.evaluate(()=>!!document.fullscreenElement));
+    assert(!(await denied.locator('#mobileViewingHelp').innerText()).includes('加入主畫面'));
+    await denied.locator('#expandReadingButton').click();
+    assert(await denied.locator('#viewerFooter').isHidden());
+    await context.close();
+  });
+  await check('compact reading controls fit phone tablet and laptop without covering final text',async()=>{
+    const context=await browser.newContext();const writer=await context.newPage(),reader=await context.newPage();
+    await writer.goto(base+'/edit/COMPACT');await writer.waitForFunction(()=>quill.isEnabled());
+    await writer.evaluate(()=>quill.setText(Array.from({length:50},(_,i)=>`第${i}行，直接觀看字幕。\n`).join(''),'user'));
+    await reader.goto(base+'/view/COMPACT');await reader.waitForFunction(()=>quill.getText().includes('第49行'));
+    await writer.evaluate(()=>{const el=document.getElementById('editorContainer');el.scrollTop=el.scrollHeight;});
+    await reader.evaluate(()=>document.fonts.ready);
+    for(const size of [{width:320,height:568},{width:844,height:390},{width:1024,height:768},{width:1366,height:768}]){
+      await reader.setViewportSize(size);
+      await reader.waitForFunction(()=>{
+        const el=document.getElementById('viewerContainer');return el.scrollHeight-el.scrollTop-el.clientHeight<3;
+      });
+      const metrics=await reader.evaluate(()=>{
+        const last=quill.getText().trimEnd().length-1;
+        return {lastBottom:document.getElementById('editor').getBoundingClientRect().top+quill.getBounds(last,1).bottom,
+          actions:document.getElementById('viewerQuickActions').getBoundingClientRect().toJSON(),overflow:document.documentElement.scrollWidth>innerWidth};
+      });
+      assert(!metrics.overflow);
+      assert(metrics.actions.left>=0&&metrics.actions.right<=size.width);
+      assert(metrics.lastBottom<metrics.actions.top-5,JSON.stringify({size,metrics}));
+      assert(await reader.locator('#viewerFooter').isHidden());
+    }
+    await reader.screenshot({path:resolve(output,'免安裝觀眾閱讀版測試.png')});
+    await context.close();
+  });
+  await check('connection interruption remains visible while reading settings are hidden',async()=>{
+    const context=await browser.newContext();const reader=await context.newPage();await reader.goto(base+'/view/VIEWER-QA');
+    await reader.waitForFunction(()=>document.getElementById('readingConnectionStatus').hidden);
+    await reader.evaluate(()=>socket.disconnect());
+    await reader.locator('#readingConnectionStatus').waitFor({state:'visible'});
+    assert((await reader.locator('#readingConnectionStatus').innerText()).includes('離線'));
+    assert(await reader.locator('#viewerFooter').isHidden());
+    await reader.evaluate(()=>socket.connect());
+    await reader.waitForFunction(()=>document.getElementById('readingConnectionStatus').hidden);
     await context.close();
   });
   assert.deepEqual(errors, []);

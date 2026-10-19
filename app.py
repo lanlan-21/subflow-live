@@ -40,6 +40,7 @@ lock = threading.RLock()
 rooms = {}
 members = {}
 DEFAULT_SETTINGS = dict(theme='dark', size=48, scale=100, pad_x=8, pad_y=10)
+COLLABORATION_PROTOCOL = 2
 STORAGE_DURABLE = os.environ.get('SUBFLOW_DURABLE_STORAGE', '0' if os.environ.get('RENDER') else '1') == '1'
 
 
@@ -106,6 +107,22 @@ def authorized(room, token):
         return signer.loads(token) == {'room': room}
     except (BadSignature, TypeError):
         return False
+
+
+@app.after_request
+def prevent_stale_entry_pages(response):
+    if request.endpoint in ('edit', 'view', 'editor_session'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.route('/api/rooms/<room_id>/session')
+def editor_session(room_id):
+    if not valid_room(room_id):
+        abort(400)
+    # Same invitation access as /edit/<room_id>; renew the existing role rather
+    # than weakening signature validation when a deployment rotates the key.
+    return jsonify(token=signer.dumps({'room': room_id}))
 
 
 @app.route('/')
@@ -196,24 +213,52 @@ def handle_join(data):
             return {'error': '房間名稱不正確'}
         editor = data.get('is_editor') is True
         if editor and not authorized(room, data.get('token')):
-            return {'error': '編輯授權失效，請重新整理頁面'}
+            return {'error': '正在更新編輯連線', 'code': 'session_expired'}
+        if data.get('protocol_version', COLLABORATION_PROTOCOL) != COLLABORATION_PROTOCOL:
+            return {'error': '共筆協定暫不相容', 'code': 'protocol_mismatch'}
         cid = data.get('client_id')
         if not isinstance(cid, int) or not 0 <= cid <= 2**53 - 1:
             return {'error': '協作身分不正確'}
-        if request.sid in members:
+        prior = members.get(request.sid)
+        same_member = prior and prior['room'] == room and prior['editor'] == editor and prior['client_id'] == cid
+        if prior and not same_member:
             leave_room(members[request.sid]['room'])
             remove_member(request.sid)
         r = get_room(room)
-        members[request.sid] = dict(room=room, editor=editor, client_id=cid, state=None)
-        join_room(room)
-        if editor:
-            r['editors'][request.sid] = cid
-            if r['master'] is None:
-                r['master'] = request.sid
-        else:
-            r['viewers'].add(request.sid)
-        broadcast_roles(room)
-        return dict(state=encode(r['doc'].get_update()), settings=r['settings'], master_doc_client_id=r['editors'].get(r['master']), durable=STORAGE_DURABLE, asset_version=ASSET_VERSION, peers=[dict(client_id=m['client_id'], state=m['state']) for m in members.values() if m['room'] == room and m['state'] is not None])
+        if not same_member:
+            members[request.sid] = dict(room=room, editor=editor, client_id=cid, state=None)
+            join_room(room)
+            if editor:
+                r['editors'][request.sid] = cid
+                if r['master'] is None:
+                    r['master'] = request.sid
+            else:
+                r['viewers'].add(request.sid)
+            broadcast_roles(room)
+            emit('request_sync', to=room, include_self=False)
+        # Older v2 clients block on an asset hash mismatch. An omitted hash lets
+        # those compatible clients receive the document; hashes are not protocols.
+        return dict(state=encode(r['doc'].get_update()), settings=r['settings'], projection=r.get('projection'), master_doc_client_id=r['editors'].get(r['master']), durable=STORAGE_DURABLE,
+                    asset_version=ASSET_VERSION if data.get('protocol_version') else None,
+                    server_asset_version=ASSET_VERSION, protocol_version=COLLABORATION_PROTOCOL,
+                    peers=[dict(client_id=m['client_id'], state=m['state']) for m in members.values() if m['room'] == room and m['state'] is not None])
+
+
+@socketio.on('sync_document')
+def handle_sync_document(data=None):
+    with lock:
+        m = members.get(request.sid)
+        if not m:
+            return {'error': '連線尚未加入文件', 'code': 'not_joined'}
+        r = rooms[m['room']]
+        try:
+            vector = decode(data['state_vector']) if isinstance(data, dict) and data.get('state_vector') else None
+            update = r['doc'].get_update(vector)
+        except Exception:
+            return {'error': '同步資訊不正確'}
+        return dict(state=encode(update), settings=r['settings'], projection=r.get('projection'),
+                    master_doc_client_id=r['editors'].get(r['master']),
+                    peers=[dict(client_id=peer['client_id'], state=peer['state']) for peer in members.values() if peer['room'] == m['room'] and peer['state'] is not None])
 
 
 @socketio.on('document_update')

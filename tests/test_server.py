@@ -16,7 +16,7 @@ def isolated(tmp_path, monkeypatch):
 
 def client(editor=True, room='meeting', cid=1):
     socket = server.socketio.test_client(server.app)
-    result = socket.emit('join', dict(room=room, client_id=cid, is_editor=editor,
+    result = socket.emit('join', dict(room=room, client_id=cid, is_editor=editor, protocol_version=2,
         token=server.signer.dumps({'room': room}) if editor else None), callback=True)
     assert 'state' in result
     return socket, result
@@ -197,6 +197,60 @@ def test_editor_viewer_and_handshake_share_asset_version():
     assert http.get('/healthz').json['asset_version'] == server.ASSET_VERSION
     for route in ('/edit/meeting', '/view/meeting'):
         assert f'/static/collaboration.js?v={server.ASSET_VERSION}' in http.get(route).text
+
+
+def test_compatible_legacy_clients_receive_snapshot_without_hash_block():
+    writer, _ = client(cid=51)
+    doc, text = document()
+    text.insert(0, '加入即見最新稿')
+    assert send(writer, doc)['saved']
+    legacy = server.socketio.test_client(server.app)
+    result = legacy.emit('join', dict(room='meeting', client_id=52, is_editor=False), callback=True)
+    assert result['asset_version'] is None
+    assert result['server_asset_version'] == server.ASSET_VERSION
+    assert result['protocol_version'] == 2
+    assert str(document(base64.b64decode(result['state']))[1]) == '加入即見最新稿'
+
+
+def test_sync_document_repairs_missing_updates_and_keeps_projection():
+    writer, _ = client(cid=61)
+    viewer, _ = client(editor=False, cid=62)
+    doc, text = document()
+    text.insert(0, '第一版')
+    assert send(writer, doc)['saved']
+    local, _ = document(doc.get_update())
+    text.insert(len(text), '與後續補字')
+    assert send(writer, doc)['saved']
+    writer.emit('projection_scroll', {'index': 2, 'bottom': False})
+    result = viewer.emit('sync_document', {'state_vector': server.encode(local.get_state())}, callback=True)
+    local.apply_update(base64.b64decode(result['state']))
+    assert str(local.get('text', type=Text)) == '第一版與後續補字'
+    assert result['projection']['index'] == 2
+    outsider = server.socketio.test_client(server.app)
+    assert outsider.emit('sync_document', {}, callback=True)['code'] == 'not_joined'
+
+
+def test_duplicate_join_preserves_master_and_presence():
+    first, _ = client(cid=71)
+    second, _ = client(cid=72)
+    second.emit('claim_master')
+    first.emit('presence', {'clock': 1, 'state': {'user': {'name': '已加入'}}})
+    result = first.emit('join', dict(room='meeting', client_id=71, is_editor=True, protocol_version=2,
+                                   token=server.signer.dumps({'room': 'meeting'})), callback=True)
+    assert result['master_doc_client_id'] == 72
+    assert any(p['client_id'] == 71 and p['state']['state']['user']['name'] == '已加入' for p in result['peers'])
+
+
+def test_session_renewal_and_entry_pages_are_not_cached():
+    http = server.app.test_client()
+    for path in ('/edit/meeting', '/view/meeting', '/api/rooms/meeting/session'):
+        assert http.get(path).headers['Cache-Control'] == 'no-store'
+    token = http.get('/api/rooms/meeting/session').json['token']
+    assert server.authorized('meeting', token)
+    assert not server.authorized('another-room', token)
+    stale = server.socketio.test_client(server.app)
+    assert stale.emit('join', dict(room='meeting', client_id=99, is_editor=True, token='expired', protocol_version=2), callback=True)['code'] == 'session_expired'
+    assert 'state' in stale.emit('join', dict(room='meeting', client_id=99, is_editor=True, token=token, protocol_version=2), callback=True)
 
 
 def test_storage_health_check_detects_unavailable_database(monkeypatch):

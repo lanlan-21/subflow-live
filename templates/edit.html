@@ -267,6 +267,9 @@
 
     let amIMaster = true;
     let currentMasterClientId = null;
+    let initialViewportApplied = false;
+    let viewportTouched = false;
+    for (const event of ['wheel', 'pointerdown', 'keydown']) editorContainer.addEventListener(event, () => { viewportTouched = true; }, { passive: true });
     let wordCountTimer;
     function updateWordCountThrottled() {
       clearTimeout(wordCountTimer);
@@ -275,6 +278,22 @@
     const collaboration = createCollaboration({
       quill, socket, room: roomId, token: editToken,
       onStatus: message => { document.getElementById('syncStatus').textContent = message; },
+      onProjection: data => {
+        // Open a new collaborator at the current working section once, then
+        // preserve that person's independent reading/editing position.
+        if (initialViewportApplied || amIMaster) return;
+        initialViewportApplied = true;
+        const align = () => {
+          if (viewportTouched || quill.hasFocus()) return;
+          if (data.bottom) editorContainer.scrollTop = editorContainer.scrollHeight;
+          else {
+            const index = Math.min(data.index, Math.max(0, quill.getLength() - 1));
+            editorContainer.scrollTop += document.getElementById('editor').getBoundingClientRect().top - editorContainer.getBoundingClientRect().top + quill.getBounds(index).top;
+          }
+        };
+        requestAnimationFrame(align);
+        document.fonts.ready.then(() => requestAnimationFrame(align));
+      },
       onComposition: info => {
         const status = document.getElementById('imePreviewStatus');
         status.textContent = info.active ? `我的組字：${info.text || '正在組字…'}` : '組字預覽就緒';
@@ -289,7 +308,7 @@
         const status = document.getElementById('peerImeStatus');
         const message = peers.map(peer => `${peer.name}：${peer.text || '正在組字…'}`).join(' ｜ ');
         const outdated = info.versions.some(peer => !peer.current);
-        const warning = outdated ? '（夥伴有舊版或未確認版本，請重新整理）' : '';
+        const warning = outdated ? '（夥伴使用不同介面版本，同步仍持續）' : '';
         status.textContent = `夥伴組字：${message || '尚未輸入'}${warning}`;
         status.title = message + warning;
         status.dataset.peerCount = String(peers.length);

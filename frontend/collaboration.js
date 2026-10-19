@@ -10,6 +10,25 @@ import { io } from 'socket.io-client';
 window.Quill = Quill;
 window.QuillCursors = QuillCursors;
 window.io = io;
+// Use capabilities rather than device names: Safari on older iPads exposes
+// prefixed methods, while an iPhone/embedded browser may expose neither.
+window.createViewerFullscreen = () => ({
+  get supported() {
+    return !!((document.fullscreenEnabled && document.documentElement.requestFullscreen) ||
+      (document.webkitFullscreenEnabled !== false && document.documentElement.webkitRequestFullscreen));
+  },
+  get active() { return !!(document.fullscreenElement || document.webkitFullscreenElement); },
+  async enter() {
+    const root = document.documentElement;
+    if (document.fullscreenEnabled && root.requestFullscreen) await root.requestFullscreen();
+    else if (document.webkitFullscreenEnabled !== false && root.webkitRequestFullscreen) await root.webkitRequestFullscreen();
+    else throw new Error('Fullscreen unavailable');
+  },
+  async exit() {
+    if (document.fullscreenElement && document.exitFullscreen) await document.exitFullscreen();
+    else if (document.webkitFullscreenElement && document.webkitExitFullscreen) await document.webkitExitFullscreen();
+  }
+});
 const runtimeVersion = new URL(document.currentScript?.src || window.location.href).searchParams.get('v');
 
 // A Parchment leaf, like Quill's zero-length cursor, participates in layout but
@@ -34,7 +53,7 @@ const encode = bytes => {
 };
 const decode = data => Uint8Array.from(atob(data), char => char.charCodeAt(0));
 
-window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {}, onComposition = () => {}, onPeerComposition = () => {}, onPreviewChange = () => {} }) {
+window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {}, onComposition = () => {}, onPeerComposition = () => {}, onPreviewChange = () => {}, onProjection = () => {} }) {
   const doc = new Y.Doc(); // A new ID for every document instance, including each tab.
   const text = doc.getText('text');
   const imeCommits = doc.getMap('imeCommits');
@@ -53,6 +72,10 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   let sending = false;
   let generation = 0;
   let timer;
+  let flushDue = 0;
+  let joinTimer;
+  let joinPending = false;
+  let resyncPending = false;
   let ready = false;
   let backupReady = false;
   let durable = true;
@@ -314,8 +337,17 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   }
 
   function schedule(delay = 80) {
+    const due = Date.now() + delay;
+    // A bounded throttle: a continuous stream must not postpone every save.
+    if (timer && flushDue <= due) return;
     clearTimeout(timer);
-    timer = setTimeout(flush, delay);
+    flushDue = due;
+    timer = setTimeout(() => { timer = null; flush(); }, delay);
+  }
+
+  function retryJoin(delay = 2000) {
+    clearTimeout(joinTimer);
+    joinTimer = setTimeout(join, delay);
   }
 
   function flush() {
@@ -353,17 +385,34 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   });
 
   async function join() {
-    if (!ready || !socket.connected) return;
+    if (!ready || !socket.connected || joinPending) return;
+    clearTimeout(joinTimer);
+    joinPending = true;
     const current = ++generation;
-    socket.timeout(10000).emit('join', { room, token, client_id: doc.clientID, is_editor: !readOnly }, (error, result) => {
+    socket.timeout(10000).emit('join', { room, token, client_id: doc.clientID, is_editor: !readOnly, protocol_version: 2 }, async (error, result) => {
       if (current !== generation) return;
-      if (error || result?.error || !result?.state) {
-        status(result?.error || '無法加入文件，正在重試');
-        timer = setTimeout(join, 2000);
+      joinPending = false;
+      if (!error && result?.code === 'session_expired' && !readOnly) {
+        status('正在恢復編輯連線；本機修改仍保留');
+        try {
+          const response = await fetch(`/api/rooms/${encodeURIComponent(room)}/session`, { cache: 'no-store' });
+          if (!response.ok) throw new Error('Session unavailable');
+          const session = await response.json();
+          if (current !== generation) return;
+          if (typeof session.token !== 'string') throw new Error('Session unavailable');
+          token = session.token;
+          retryJoin(0);
+        } catch { if (current === generation) retryJoin(); }
         return;
       }
-      if (runtimeVersion && result.asset_version && runtimeVersion !== result.asset_version) {
-        status('程式已更新，請重新整理以使用同一版本共筆；本機修改仍保留');
+      if (error || result?.error || !result?.state) {
+        status(result?.error || '無法加入文件，正在重試');
+        retryJoin();
+        return;
+      }
+      if (result.protocol_version && result.protocol_version !== 2) {
+        status('共筆服務正在更新，保留本機內容並嘗試重連');
+        retryJoin();
         return;
       }
       projectionClientId = Number.isSafeInteger(result.master_doc_client_id) ? result.master_doc_client_id : null;
@@ -376,6 +425,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       if (!readOnly) pending.push(Y.encodeStateAsUpdate(doc));
       result.peers.forEach(applyPresence);
       onSettings(result.settings);
+      if (result.projection) onProjection(result.projection);
       quill.enable(!readOnly);
       sendPresence();
       status();
@@ -384,6 +434,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   }
 
   socket.on('connect', join);
+  socket.on('request_sync', () => { schedule(0); sendPresence(); });
   socket.on('role_status_update', data => {
     projectionClientId = Number.isSafeInteger(data.master_doc_client_id) ? data.master_doc_client_id : null;
     renderCompositionPreviews(true);
@@ -392,6 +443,9 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     generation++;
     joined = false;
     sending = false;
+    joinPending = false;
+    resyncPending = false;
+    clearTimeout(joinTimer);
     removeAwarenessStates(awareness, [...awareness.getStates().keys()].filter(id => id !== doc.clientID), network);
     status();
   });
@@ -399,6 +453,29 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
   socket.on('presence', applyPresence);
   socket.on('presence_remove', data => removeAwarenessStates(awareness, [data.client_id], network));
   socket.on('sync_settings', onSettings);
+
+  function reconcile() {
+    if (!joined || !socket.connected || resyncPending) return;
+    const current = generation;
+    resyncPending = true;
+    socket.timeout(10000).emit('sync_document', { state_vector: encode(Y.encodeStateVector(doc)) }, (error, result) => {
+      if (current !== generation) return;
+      resyncPending = false;
+      if (result?.code === 'not_joined') { joined = false; join(); return; }
+      if (error || !result?.state) return;
+      receive(decode(result.state));
+      projectionClientId = Number.isSafeInteger(result.master_doc_client_id) ? result.master_doc_client_id : null;
+      result.peers?.forEach(applyPresence);
+      onSettings(result.settings);
+      if (result.projection) onProjection(result.projection);
+      renderCompositionPreviews();
+      schedule(0);
+    });
+  }
+  // Repair missed broadcasts and browser suspension without reloading the page.
+  setInterval(() => { if (document.visibilityState === 'visible') reconcile(); }, 5000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reconcile(); });
+  window.addEventListener('pageshow', reconcile);
 
   if (persistence) {
     const backupTimeout = setTimeout(() => {
@@ -412,7 +489,6 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       backupReady = true;
       localError = '';
       ready = true;
-      quill.enable(true);
       undo.clear();
       persistence.db.addEventListener('error', () => {
         backupReady = false;

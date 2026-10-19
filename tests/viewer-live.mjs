@@ -45,7 +45,7 @@ try{
   await ca.send('Input.imeSetComposition',{text:'更新中的主投影文字。'.repeat(30),selectionStart:300,selectionEnd:300});
   await v.waitForFunction(()=>document.querySelector('.remote-ime-preview')?.dataset.preview.startsWith('更新中'));
   assert(Math.abs(await v.locator('#viewerContainer').evaluate(el=>el.scrollTop)-before)<2);
-  await v.locator('#followMasterButton').click();
+  await v.locator('#showViewerToolbar').click();await v.locator('#followMasterButton').click();await v.locator('#hideViewerToolbar').click();
  });
  await check('corrector preedit is excluded until server-authorized projection takeover',async()=>{
   await b.evaluate(()=>{quill.focus();quill.setSelection(4,0);});
