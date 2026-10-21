@@ -97,13 +97,17 @@
     body.toolbar-hidden:not(.is-fullscreen) #floatingActionGroup { display: flex; }
     #floatingActionGroup:hover { opacity: 1; }
     body.status-hidden .statusbar,
-    body.is-fullscreen:not(.fullscreen-tools) .toolbar,
-    body.is-fullscreen:not(.fullscreen-tools) .statusbar,
+    body.is-fullscreen .toolbar,
+    body.is-fullscreen .statusbar,
     body.is-fullscreen #floatingActionGroup,
-    body.is-fullscreen #topHoverTrigger { display: none !important; }
-    body.is-fullscreen.fullscreen-tools .toolbar { position: static; transform: none; }
+    body.is-fullscreen #topHoverTrigger,
+    body.is-fullscreen #workspaceQuickControls,
+    body.is-fullscreen #aiStreamBar,
+    body.is-fullscreen #endLineMarker { display: none !important; }
+    body.is-fullscreen { --bg-main: #000; --bg-editor: #000; --text-color: #ffff33; --caret-color: #ffff33; }
+    body.is-fullscreen, body.is-fullscreen .editor-wrapper { transition: none; }
     #workspaceQuickControls { display: none; flex-shrink: 0; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 4px 12px; background: #1e1e1e; }
-    body.status-hidden #workspaceQuickControls, body.is-fullscreen #workspaceQuickControls { display: flex; }
+    body.status-hidden #workspaceQuickControls { display: flex; }
     #workspaceQuickControls .btn { min-height: 32px; }
     #workspaceQuickControls [hidden] { display: none; }
     .export-dropdown { position: relative; display: inline-block; }
