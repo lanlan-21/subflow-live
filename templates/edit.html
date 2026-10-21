@@ -496,6 +496,9 @@
     }
     document.addEventListener('fullscreenchange', updateWorkspaceControls);
     document.addEventListener('webkitfullscreenchange', updateWorkspaceControls);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && workspaceFullscreen.active) toggleFullscreen();
+    });
     try { document.body.classList.toggle('status-hidden', localStorage.getItem('subflow-statusbar-hidden') === 'true'); } catch {}
     updateWorkspaceControls();
 
