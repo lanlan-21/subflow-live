@@ -15,7 +15,7 @@
     body[data-theme="navy"] { --bg-main: #0b132b; --bg-editor: #1c2541; --text-color: #e0e1dd; --caret-color: #38bdf8; }
     body[data-theme="light"] { --bg-main: #f1f5f9; --bg-editor: #ffffff; --text-color: #0f172a; --caret-color: #0f172a; }
 
-    body { margin: 0; display: flex; flex-direction: column; height: 100vh; background: var(--bg-main); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; overflow: hidden; transition: background 0.2s ease, color 0.2s ease; }
+    body { margin: 0; display: flex; flex-direction: column; height: 100vh; height: 100dvh; background: var(--bg-main); color: var(--text-color); font-family: -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; overflow: hidden; transition: background 0.2s ease, color 0.2s ease; }
 
     .toolbar { display: flex; gap: 8px; padding: 8px 16px; background: #1e1e1e; border-bottom: 1px solid #333; align-items: center; flex-wrap: wrap; z-index: 100; transition: transform 0.25s ease; }
     #topHoverTrigger { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 12px; z-index: 150; }
@@ -48,7 +48,7 @@
     .vu-meter-bar { width: 50px; height: 9px; background: #18181b; border-radius: 4px; overflow: hidden; border: 1px solid #52525b; }
     #vuFill { width: 0%; height: 100%; background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%); transition: width 0.04s ease-out; }
 
-    .editor-wrapper { flex: 1; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
+    .editor-wrapper { flex: 1; min-height: 0; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
     .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; cursor: text; }
 
     .ql-toolbar { display: none !important; }
@@ -96,9 +96,16 @@
     #floatingActionGroup { display: none; position: absolute; top: 16px; right: 20px; z-index: 90; gap: 8px; opacity: 0.35; transition: opacity 0.2s; }
     body.toolbar-hidden:not(.is-fullscreen) #floatingActionGroup { display: flex; }
     #floatingActionGroup:hover { opacity: 1; }
-    body.is-fullscreen .toolbar, body.is-fullscreen .statusbar, body.is-fullscreen #floatingActionGroup, body.is-fullscreen #topHoverTrigger { display: none !important; }
-    #exitFsBtn { display: none; position: absolute; bottom: 24px; right: 24px; z-index: 999; opacity: 0.25; }
-    #exitFsBtn:hover { opacity: 0.9; }
+    body.status-hidden .statusbar,
+    body.is-fullscreen:not(.fullscreen-tools) .toolbar,
+    body.is-fullscreen:not(.fullscreen-tools) .statusbar,
+    body.is-fullscreen #floatingActionGroup,
+    body.is-fullscreen #topHoverTrigger { display: none !important; }
+    body.is-fullscreen.fullscreen-tools .toolbar { position: static; transform: none; }
+    #workspaceQuickControls { display: none; flex-shrink: 0; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 4px 12px; background: #1e1e1e; }
+    body.status-hidden #workspaceQuickControls, body.is-fullscreen #workspaceQuickControls { display: flex; }
+    #workspaceQuickControls .btn { min-height: 32px; }
+    #workspaceQuickControls [hidden] { display: none; }
     .export-dropdown { position: relative; display: inline-block; }
     .export-menu { display: none; position: absolute; right: 0; top: 100%; margin-top: 4px; background-color: #1e1e1e; border: 1px solid #444; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); z-index: 1000; min-width: 180px; }
     .export-menu button { width: 100%; padding: 10px 14px; background: none; border: none; color: #f1f5f9; text-align: left; font-size: 14px; cursor: pointer; }
@@ -158,6 +165,7 @@
     <button id="masterToggleBtn" class="btn btn-master-role active" onclick="requestMasterRole()">🔒 主投影</button>
     <button class="btn btn-dark" onclick="toggleToolbar(false)">▲ 收起</button>
     <button class="btn btn-dark" onclick="toggleFullscreen()">⛶ 全螢幕</button>
+    <button class="btn btn-dark" id="toggleStatusbarBtn" aria-controls="workspaceStatusbar" aria-expanded="true" onclick="toggleStatusbar()">隱藏字數狀態列</button>
     <button class="btn btn-dark" onclick="changeCollaboratorName()">協作姓名</button>
     <button class="btn btn-dark" onclick="showRevisions()">版本紀錄</button>
     <button class="btn btn-danger" onclick="confirmClearCanvas()">🗑️ 清空</button>
@@ -184,7 +192,12 @@
       <div id="endLineMarker"><span>--- END ---</span></div>
     </div>
 
-    <button class="btn" id="exitFsBtn" onclick="toggleFullscreen()">✕ 退出全螢幕 (ESC)</button>
+  </div>
+
+  <div id="workspaceQuickControls" aria-label="工作區顯示控制">
+    <button class="btn btn-dark" id="restoreStatusbarBtn" onclick="toggleStatusbar(true)">顯示字數狀態列</button>
+    <button class="btn btn-dark" id="restoreWorkspaceToolsBtn" onclick="toggleToolbar(!document.body.classList.contains('fullscreen-tools'))">顯示工具列</button>
+    <button class="btn btn-dark" id="workspaceFullscreenBtn" onclick="toggleFullscreen()">⛶ 全螢幕</button>
   </div>
 
   <div id="aiStreamBar">
@@ -193,7 +206,7 @@
     <span id="aiInterimText">請說話，字詞將即時推進編輯區...</span>
   </div>
 
-  <div class="statusbar">
+  <div class="statusbar" id="workspaceStatusbar">
     <div class="status-left-box">
       <div>頻道：<strong>{{ room_id }}</strong> | 字數統計：<strong id="wordCount">0</strong> 字</div>
       <div class="save-alert-badge" onclick="exportTxt()"><span id="syncStatus" role="status" aria-live="polite">正在載入本機備份…</span></div>
@@ -202,6 +215,7 @@
       <span id="clientVersionText" title="兩位聽打員應顯示相同版本">版本 {{ asset_version }}</span>
     </div>
     <div class="status-right-box">
+      <button class="btn btn-dark" onclick="toggleStatusbar(false)" aria-label="隱藏字數狀態列">收起狀態列</button>
       <div class="viewer-badge"><span>📺 觀眾：</span><strong id="viewerCountText" style="color: #93c5fd;">0</strong></div>
       <div class="online-badge">
         <span class="online-dot" id="onlineDot"></span>
@@ -440,8 +454,46 @@
     function stepPadY(delta) { padYInput.value = Math.max(0, (parseInt(padYInput.value, 10) || 0) + delta); applyAndSync(); }
     function stepSize(delta) { const input = document.getElementById('fontSizeInput'); input.value = Math.min(Math.max((parseInt(input.value, 10) || 48) + delta, 12), 140); applyAndSync(); }
     function changeTheme(themeName) { document.body.setAttribute('data-theme', themeName); applyAndSync(); }
-    function toggleToolbar(show) { document.body.classList.toggle('toolbar-hidden', !show); }
-    function toggleFullscreen() { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{}); else document.exitFullscreen(); }
+    const workspaceFullscreen = createViewerFullscreen();
+    function updateWorkspaceControls() {
+      const hidden = document.body.classList.contains('status-hidden');
+      const active = workspaceFullscreen.active;
+      document.body.classList.toggle('is-fullscreen', active);
+      if (!active) document.body.classList.remove('fullscreen-tools');
+      const toggle = document.getElementById('toggleStatusbarBtn');
+      toggle.textContent = hidden ? '顯示字數狀態列' : '隱藏字數狀態列';
+      toggle.setAttribute('aria-expanded', String(!hidden));
+      document.getElementById('restoreStatusbarBtn').hidden = !hidden && (!active || document.body.classList.contains('fullscreen-tools'));
+      document.getElementById('restoreWorkspaceToolsBtn').hidden = !active;
+      document.getElementById('restoreWorkspaceToolsBtn').textContent = document.body.classList.contains('fullscreen-tools') ? '收起工具列' : '顯示工具列';
+      document.getElementById('workspaceFullscreenBtn').textContent = active ? '退出全螢幕 (Esc)' : '⛶ 全螢幕';
+      requestAnimationFrame(scheduleProjection);
+    }
+    function toggleToolbar(show) {
+      if (workspaceFullscreen.active) document.body.classList.toggle('fullscreen-tools', show);
+      document.body.classList.toggle('toolbar-hidden', !show);
+      updateWorkspaceControls();
+    }
+    function toggleStatusbar(show) {
+      if (typeof show !== 'boolean') show = document.body.classList.contains('status-hidden');
+      document.body.classList.toggle('status-hidden', !show);
+      if (show && workspaceFullscreen.active) document.body.classList.add('fullscreen-tools');
+      try { localStorage.setItem('subflow-statusbar-hidden', String(!show)); } catch {}
+      updateWorkspaceControls();
+    }
+    async function toggleFullscreen() {
+      try {
+        if (workspaceFullscreen.active) await workspaceFullscreen.exit();
+        else await workspaceFullscreen.enter();
+      } catch {
+        alert('目前瀏覽器無法進入全螢幕。電腦可試按 F11；也可以收起上方工具列與下方字數狀態列，增加聽打空間。');
+      }
+      updateWorkspaceControls();
+    }
+    document.addEventListener('fullscreenchange', updateWorkspaceControls);
+    document.addEventListener('webkitfullscreenchange', updateWorkspaceControls);
+    try { document.body.classList.toggle('status-hidden', localStorage.getItem('subflow-statusbar-hidden') === 'true'); } catch {}
+    updateWorkspaceControls();
 
     function openAudienceView() { window.open(audienceUrl, '_blank', 'width=1000,height=700'); }
     function copyLink() { navigator.clipboard.writeText(window.location.href); alert('已複製共筆連結'); }
