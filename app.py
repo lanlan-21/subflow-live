@@ -39,7 +39,7 @@ signer = URLSafeSerializer(app.config['SECRET_KEY'], salt='subflow-editor-v2')
 lock = threading.RLock()
 rooms = {}
 members = {}
-DEFAULT_SETTINGS = dict(theme='dark', size=48, scale=100, pad_x=8, pad_y=10)
+DEFAULT_SETTINGS = dict(theme='dark', size=48, scale=100, pad_x=8, pad_y=10, line_height=1.25)
 COLLABORATION_PROTOCOL = 2
 STORAGE_DURABLE = os.environ.get('SUBFLOW_DURABLE_STORAGE', '0' if os.environ.get('RENDER') else '1') == '1'
 
@@ -311,7 +311,7 @@ def handle_settings(data):
         settings = dict(r['settings'])
         if data.get('theme') in ('dark', 'green', 'navy', 'light'):
             settings['theme'] = data['theme']
-        for key, bounds in dict(size=(12, 140), scale=(40, 250), pad_x=(0, 300), pad_y=(0, 300)).items():
+        for key, bounds in dict(size=(12, 140), scale=(40, 250), pad_x=(0, 300), pad_y=(0, 300), line_height=(1, 3)).items():
             value = data.get(key)
             if isinstance(value, (int, float)) and bounds[0] <= value <= bounds[1]:
                 settings[key] = value

@@ -55,6 +55,32 @@ def test_only_current_master_controls_projection_and_room_isolation():
     assert server.rooms['meeting']['projection']['index'] == 20
 
 
+def test_line_height_sync_validation_and_persistence():
+    master, initial = client(cid=201)
+    partner, _ = client(cid=202)
+    viewer, _ = client(editor=False, cid=203)
+    assert initial['settings']['line_height'] == 1.25
+    for socket in (master, partner, viewer):
+        socket.get_received()
+    partner.emit('update_settings', {'line_height': 2})
+    viewer.emit('update_settings', {'line_height': 2})
+    assert server.rooms['meeting']['settings']['line_height'] == 1.25
+    assert master.emit('update_settings', {'line_height': 1.30}, callback=True)['saved']
+    for socket in (partner, viewer):
+        assert any(event['name'] == 'sync_settings' and event['args'][0]['line_height'] == 1.30
+                   for event in socket.get_received())
+    for value in (0.9, 3.1, '2', float('nan'), float('inf')):
+        master.emit('update_settings', {'line_height': value})
+        assert server.rooms['meeting']['settings']['line_height'] == 1.30
+    master.emit('update_settings', {'size': 50})  # An older client omits the new setting.
+    late, joined = client(editor=False, cid=204)
+    assert joined['settings']['line_height'] == 1.30
+    for socket in (master, partner, viewer, late):
+        socket.disconnect()
+    server.rooms.clear()
+    assert server.get_room('meeting')['settings']['line_height'] == 1.30
+
+
 def test_concurrent_edits_and_duplicate_delivery():
     a, init = client(cid=1)
     b, _ = client(cid=2)

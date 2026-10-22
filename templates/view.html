@@ -115,7 +115,7 @@
     const viewerContainer = document.getElementById('viewerContainer');
 
     let currentMasterClientId = null;
-    let masterSettings = { theme: 'dark', size: 48, scale: 100, pad_x: 8, pad_y: 10 };
+    let masterSettings = { theme: 'dark', size: 48, scale: 100, pad_x: 8, pad_y: 10, line_height: 1.25 };
     function readPreference(key) { try { return localStorage.getItem(key); } catch { return null; } }
     function savePreference(key, value) { try { localStorage.setItem(key, value); } catch {} }
     const savedScale = Number(readPreference('STT_LOCAL_SCALE_' + roomId));
@@ -137,6 +137,7 @@
       const finalFontSize = (baseFontSize * localViewerScale) + 'px';
 
       qlEditor.style.fontSize = finalFontSize;
+      qlEditor.style.lineHeight = masterSettings.line_height ?? 1.25;
       qlEditor.style.padding = `${py} ${px} 24px ${px}`;
       document.getElementById('localScaleHint').textContent = Math.round(baseFontSize * localViewerScale) + 'px';
       scheduleFollow();

@@ -59,8 +59,9 @@
       font-family: "TW-Kai", "DFKai-SB", "BiauKai", "標楷體", "Kaiti TC", "STKaiti", serif !important;
       font-size: 48px; line-height: 1.25; color: var(--text-color) !important;
       caret-color: var(--caret-color); white-space: pre-wrap; word-break: break-all;
-      text-align: justify;
+      text-align: left;
     }
+    .ql-editor p { text-align: left !important; }
 
     #endLineMarker {
       display: flex; align-items: center; justify-content: flex-end;
@@ -150,6 +151,13 @@
       <input type="number" id="scaleInput" class="size-input" value="100" step="5" onchange="applyAndSync()">%
       <button class="btn-step" onclick="stepScale(5)">+5%</button>
       <button class="btn-step" onclick="stepScale(-5)">-5%</button>
+    </div>
+
+    <div class="control-group">
+      <label for="lineHeightInput">行距：</label>
+      <input type="number" id="lineHeightInput" class="size-input" value="1.25" min="1" max="3" step="0.05" onchange="applyAndSync()">倍
+      <button class="btn-step" aria-label="增加行距" onclick="stepLineHeight(0.05)">+0.05</button>
+      <button class="btn-step" aria-label="減少行距" onclick="stepLineHeight(-0.05)">−0.05</button>
     </div>
 
     <div class="control-group">
@@ -270,6 +278,7 @@
     const endLineMarker = document.getElementById('endLineMarker');
     const wordCount = document.getElementById('wordCount');
     const scaleInput = document.getElementById('scaleInput');
+    const lineHeightInput = document.getElementById('lineHeightInput');
     const padXInput = document.getElementById('padXInput');
     const padYInput = document.getElementById('padYInput');
     const masterToggleBtn = document.getElementById('masterToggleBtn');
@@ -338,6 +347,7 @@
         document.getElementById('themeSelect').value = settings.theme;
         document.getElementById('fontSizeInput').value = settings.size;
         scaleInput.value = settings.scale;
+        lineHeightInput.value = settings.line_height ?? 1.25;
         padXInput.value = settings.pad_x;
         padYInput.value = settings.pad_y;
         applyLocalStyle();
@@ -445,6 +455,9 @@
       const px = padXInput.value + 'px'; const py = padYInput.value + 'px';
       const scaleVal = (parseInt(scaleInput.value, 10) || 100) / 100;
       qlEditor.style.fontSize = (document.getElementById('fontSizeInput').value || 48) + 'px';
+      const lineHeight = Number(lineHeightInput.value);
+      lineHeightInput.value = (Number.isFinite(lineHeight) && lineHeightInput.value !== '' ? Math.max(1, Math.min(lineHeight, 3)) : 1.25).toFixed(2);
+      qlEditor.style.lineHeight = lineHeightInput.value;
       qlEditor.style.padding = `${py} ${px} 0px ${px}`;
       qlEditor.style.zoom = scaleVal;
       endLineMarker.style.marginLeft = px;
@@ -452,7 +465,8 @@
       scheduleProjection();
     }
 
-    function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(padYInput.value, 10) }); }
+    function applyAndSync() { applyLocalStyle(); if (amIMaster) socket.emit('update_settings', { theme: document.body.getAttribute('data-theme') || 'dark', size: parseInt(document.getElementById('fontSizeInput').value, 10), scale: parseInt(scaleInput.value, 10), line_height: Number(lineHeightInput.value), pad_x: parseInt(padXInput.value, 10), pad_y: parseInt(padYInput.value, 10) }); }
+    function stepLineHeight(delta) { const current = Number(lineHeightInput.value); lineHeightInput.value = (Math.max(1, Math.min((Number.isFinite(current) && current >= 1 ? current : 1.25) + delta, 3))).toFixed(2); applyAndSync(); }
     function stepScale(delta) { scaleInput.value = Math.min(Math.max((parseInt(scaleInput.value, 10) || 100) + delta, 40), 250); applyAndSync(); }
     function stepPadX(delta) { padXInput.value = Math.max(0, (parseInt(padXInput.value, 10) || 0) + delta); applyAndSync(); }
     function stepPadY(delta) { padYInput.value = Math.max(0, (parseInt(padYInput.value, 10) || 0) + delta); applyAndSync(); }
