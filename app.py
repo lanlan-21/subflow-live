@@ -333,6 +333,11 @@ def handle_projection_scroll(data):
         if not isinstance(data, dict) or type(data.get('index')) is not int or not 0 <= data['index'] <= 2**31 - 1:
             return
         projection = dict(index=data['index'], bottom=data.get('bottom') is True)
+        if isinstance(data.get('viewport_y'), (int, float)) and 0 <= data['viewport_y'] <= 1:
+            projection['viewport_y'] = data['viewport_y']
+        if isinstance(data.get('anchor'), str) and len(data['anchor']) <= 256:
+            projection['anchor'] = data['anchor']
+        projection['stamp'] = max(int(time.time() * 1000), rooms[m['room']].get('projection', {}).get('stamp', 0) + 1)
         rooms[m['room']]['projection'] = projection
         emit('projection_scroll', projection, to=m['room'], include_self=False)
 
@@ -345,6 +350,9 @@ def handle_request_projection(_data=None):
             projection = rooms[m['room']].get('projection')
             if projection:
                 emit('projection_scroll', projection)
+            master = rooms[m['room']]['master']
+            if master:
+                emit('request_projection_master', to=master)
 
 
 @socketio.on('disconnect')

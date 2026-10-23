@@ -53,6 +53,48 @@ const encode = bytes => {
 };
 const decode = data => Uint8Array.from(atob(data), char => char.charCodeAt(0));
 
+// Share a text anchor and its position inside the visible viewport. Document
+// bottom and scroll percentages are not equivalent across different wrapping.
+window.captureProjection = (quill, container, collaboration) => {
+  const editor = quill.container;
+  const top = container.getBoundingClientRect().top - editor.getBoundingClientRect().top;
+  const height = container.clientHeight;
+  const last = Math.max(0, quill.getLength() - 1);
+  let low = 0, high = last;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (quill.getBounds(mid).top < top - 1) low = mid + 1;
+    else high = mid;
+  }
+  let index = low;
+  const bottom = container.scrollHeight - container.scrollTop - height < 40;
+  if (bottom) {
+    // Ignore trailing empty paragraphs when choosing what the audience sees.
+    const meaningful = Math.max(0, quill.getText().trimEnd().length - 1);
+    const bounds = quill.getBounds(meaningful);
+    index = meaningful;
+  }
+  const bounds = quill.getBounds(index);
+  const viewport_y = bottom && (bounds.bottom <= top || bounds.top >= top + height)
+    ? 0.65 : Math.max(0, Math.min(0.85, (bounds.top - top) / Math.max(1, height)));
+  return { index, bottom, viewport_y, anchor: collaboration.projectionAnchor(index) };
+};
+
+window.applyProjection = (quill, container, projection, collaboration, spacer) => {
+  if (!projection) return false;
+  let index = projection.anchor ? collaboration.resolveProjectionAnchor(projection.anchor) : projection.index;
+  // An anchor may arrive before the corresponding document update. Wait for it
+  // rather than clamping it to unrelated text and jumping again on delivery.
+  if (index == null || index >= quill.getLength()) return false;
+  index = Math.max(0, index);
+  if (spacer) spacer.style.height = container.clientHeight + 'px';
+  const bounds = quill.getBounds(index);
+  const offset = quill.container.getBoundingClientRect().top - container.getBoundingClientRect().top;
+  const y = Number.isFinite(projection.viewport_y) ? projection.viewport_y : 0;
+  container.scrollTop += offset + bounds.top - y * container.clientHeight;
+  return true;
+};
+
 window.createCollaboration = function ({ quill, socket, room, token, readOnly = false, onSettings = () => {}, onStatus = () => {}, onComposition = () => {}, onPeerComposition = () => {}, onPreviewChange = () => {}, onProjection = () => {} }) {
   const doc = new Y.Doc(); // A new ID for every document instance, including each tab.
   const text = doc.getText('text');
@@ -326,7 +368,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     if (origin === network || readOnly) return;
     // Throttle with a trailing latest state; continuous typing must not defer it.
     if (presenceTimer) return;
-    presenceTimer = setTimeout(() => { presenceTimer = null; sendPresence(); }, 40);
+    presenceTimer = setTimeout(() => { presenceTimer = null; sendPresence(); }, 16);
   });
   const colors = ['#22c55e', '#38bdf8', '#e879f9', '#fb923c', '#a78bfa', '#facc15'];
   if (readOnly) awareness.setLocalState(null);
@@ -336,7 +378,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
     awareness.setLocalStateField('user', { name, color: colors[doc.clientID % colors.length] });
   }
 
-  function schedule(delay = 80) {
+  function schedule(delay = 16) {
     const due = Date.now() + delay;
     // A bounded throttle: a continuous stream must not postpone every save.
     if (timer && flushDue <= due) return;
@@ -372,7 +414,7 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
       }
       pending.splice(0, count);
       status();
-      schedule();
+      schedule(0);
     });
   }
 
@@ -518,6 +560,15 @@ window.createCollaboration = function ({ quill, socket, room, token, readOnly = 
 
   return {
     doc, text, awareness, undo,
+    projectionAnchor(index) {
+      return encode(Y.encodeRelativePosition(Y.createRelativePositionFromTypeIndex(text, Math.min(index, text.length))));
+    },
+    resolveProjectionAnchor(anchor) {
+      try {
+        const position = Y.createAbsolutePositionFromRelativePosition(Y.decodeRelativePosition(decode(anchor)), doc);
+        return position?.type === text ? position.index : null;
+      } catch { return null; }
+    },
     setName(name) {
       name = name.trim().slice(0, 40);
       if (!name) return;

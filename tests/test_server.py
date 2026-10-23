@@ -81,6 +81,17 @@ def test_line_height_sync_validation_and_persistence():
     assert server.get_room('meeting')['settings']['line_height'] == 1.30
 
 
+def test_projection_viewport_metadata_is_validated_and_ordered():
+    master, _ = client(cid=301)
+    master.emit('projection_scroll', {'index': 12, 'bottom': True, 'viewport_y': 0.65, 'anchor': 'encoded-anchor'})
+    first = dict(server.rooms['meeting']['projection'])
+    assert first['viewport_y'] == 0.65 and first['anchor'] == 'encoded-anchor'
+    master.emit('projection_scroll', {'index': 13, 'viewport_y': float('nan'), 'anchor': 'x' * 257})
+    second = server.rooms['meeting']['projection']
+    assert 'viewport_y' not in second and 'anchor' not in second
+    assert second['stamp'] > first['stamp']
+
+
 def test_concurrent_edits_and_duplicate_delivery():
     a, init = client(cid=1)
     b, _ = client(cid=2)

@@ -27,7 +27,7 @@
       height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
       transition: background 0.2s ease, color 0.2s ease;
     }
-    #viewerContainer { position: relative; flex: 1; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden; }
+    #viewerContainer { position: relative; flex: 1; min-height: 0; width: 100%; overflow-y: auto; overflow-x: hidden; overflow-anchor: none; }
     .compact-reading #viewerContainer { margin-bottom: 60px; }
 
     .ql-toolbar { display: none !important; }
@@ -68,6 +68,7 @@
 <body class="compact-reading">
   <div id="viewerContainer">
     <div id="editor">等待聽打員連線...</div>
+    <div id="projectionSpacer" aria-hidden="true"></div>
   </div>
 
   <div id="viewerQuickActions" aria-label="觀看操作">
@@ -164,12 +165,9 @@
       followFrame = requestAnimationFrame(() => {
         followFrame = null;
         if (!followingMaster) return;
-        if (!projection || projection.bottom) viewerContainer.scrollTop = viewerContainer.scrollHeight;
-        else {
-          const index = Math.min(projection.index, Math.max(0, quill.getLength() - 1));
-          const offset = document.getElementById('editor').getBoundingClientRect().top - viewerContainer.getBoundingClientRect().top;
-          viewerContainer.scrollTop += offset + quill.getBounds(index).top;
-        }
+        if (!projection) viewerContainer.scrollTop = viewerContainer.scrollHeight;
+        else if (!Number.isFinite(projection.viewport_y) && projection.bottom) viewerContainer.scrollTop = viewerContainer.scrollHeight;
+        else applyProjection(quill, viewerContainer, projection, collaboration, document.getElementById('projectionSpacer'));
       });
     }
     function setFollowing(value) {
@@ -179,7 +177,12 @@
       button.textContent = value ? '跟隨主控中' : '跟隨主控';
       if (value) { socket.emit('request_projection'); scheduleFollow(); }
     }
-    socket.on('projection_scroll', data => { projection = data; scheduleFollow(); });
+    function receiveProjection(data) {
+      if (projection?.stamp && data.stamp && data.stamp < projection.stamp) return;
+      projection = data;
+      scheduleFollow();
+    }
+    socket.on('projection_scroll', receiveProjection);
     // Only intentional viewer input pauses following; programmatic scrolls do not.
     viewerContainer.addEventListener('wheel', () => setFollowing(false), { passive: true });
     viewerContainer.addEventListener('touchmove', () => setFollowing(false), { passive: true });
@@ -190,12 +193,14 @@
     });
     document.getElementById('followMasterButton').addEventListener('click', () => setFollowing(!followingMaster));
     window.addEventListener('resize', scheduleFollow);
+    window.visualViewport?.addEventListener('resize', scheduleFollow);
+    new ResizeObserver(scheduleFollow).observe(viewerContainer);
     document.fonts.ready.then(scheduleFollow);
     applyCombinedSettings();
     const collaboration = createCollaboration({
       quill, socket, room: roomId, readOnly: true,
       onPreviewChange: scheduleFollow,
-      onProjection: data => { projection = data; scheduleFollow(); },
+      onProjection: receiveProjection,
       onSettings: settings => { masterSettings = settings; applyCombinedSettings(); },
       onStatus: status => {
         document.getElementById('viewerStatus').textContent = status;
@@ -203,7 +208,6 @@
         const readingStatus = document.getElementById('readingConnectionStatus');
         readingStatus.hidden = healthy;
         readingStatus.textContent = healthy ? '' : status;
-        if (status.startsWith('已同步')) socket.emit('request_projection');
       }
     });
     quill.on('text-change', () => {

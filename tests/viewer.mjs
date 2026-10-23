@@ -226,7 +226,9 @@ try {
     for(const size of [{width:320,height:568},{width:844,height:390},{width:1024,height:768},{width:1366,height:768}]){
       await reader.setViewportSize(size);
       await reader.waitForFunction(()=>{
-        const el=document.getElementById('viewerContainer');return el.scrollHeight-el.scrollTop-el.clientHeight<3;
+        const el=document.getElementById('viewerContainer');const i=quill.getText().trimEnd().length-1;
+        const y=quill.container.getBoundingClientRect().top+quill.getBounds(i,1).bottom;
+        return y>el.getBoundingClientRect().top&&y<=el.getBoundingClientRect().bottom;
       });
       const metrics=await reader.evaluate(()=>{
         const last=quill.getText().trimEnd().length-1;

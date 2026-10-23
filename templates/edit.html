@@ -49,7 +49,7 @@
     #vuFill { width: 0%; height: 100%; background: linear-gradient(90deg, #22c55e 50%, #eab308 80%, #ef4444 100%); transition: width 0.04s ease-out; }
 
     .editor-wrapper { flex: 1; min-height: 0; display: flex; background: var(--bg-editor); position: relative; overflow: hidden; transition: background 0.2s ease; }
-    .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; cursor: text; }
+    .editor-container { position: relative; flex: 1; width: 100%; height: 100%; overflow-y: auto; overflow-x: hidden; overflow-anchor: none; cursor: text; }
 
     .ql-toolbar { display: none !important; }
     .ql-container.ql-snow { border: none !important; font-family: inherit; font-size: inherit; height: auto; }
@@ -295,9 +295,16 @@
     let amIMaster = true;
     let currentMasterClientId = null;
     let initialViewportApplied = false;
+    let initialProjection = null;
     let viewportTouched = false;
     for (const event of ['wheel', 'pointerdown', 'keydown']) editorContainer.addEventListener(event, () => { viewportTouched = true; }, { passive: true });
     let wordCountTimer;
+    function alignInitialProjection() {
+      requestAnimationFrame(() => {
+        if (!initialProjection || initialViewportApplied || amIMaster || viewportTouched || quill.hasFocus()) return;
+        initialViewportApplied = applyProjection(quill, editorContainer, initialProjection, collaboration);
+      });
+    }
     function updateWordCountThrottled() {
       clearTimeout(wordCountTimer);
       wordCountTimer = setTimeout(() => { wordCount.textContent = Math.max(0, quill.getLength() - 1); }, 200);
@@ -308,20 +315,12 @@
       onProjection: data => {
         // Open a new collaborator at the current working section once, then
         // preserve that person's independent reading/editing position.
-        if (initialViewportApplied || amIMaster) return;
-        initialViewportApplied = true;
-        const align = () => {
-          if (viewportTouched || quill.hasFocus()) return;
-          if (data.bottom) editorContainer.scrollTop = editorContainer.scrollHeight;
-          else {
-            const index = Math.min(data.index, Math.max(0, quill.getLength() - 1));
-            editorContainer.scrollTop += document.getElementById('editor').getBoundingClientRect().top - editorContainer.getBoundingClientRect().top + quill.getBounds(index).top;
-          }
-        };
-        requestAnimationFrame(align);
-        document.fonts.ready.then(() => requestAnimationFrame(align));
+        initialProjection = data;
+        alignInitialProjection();
+        document.fonts.ready.then(alignInitialProjection);
       },
       onComposition: info => {
+        scheduleProjection();
         const status = document.getElementById('imePreviewStatus');
         status.textContent = info.active ? `我的組字：${info.text || '正在組字…'}` : '組字預覽就緒';
         if (info.active) {
@@ -354,6 +353,7 @@
       }
     });
     quill.on('text-change', updateWordCountThrottled);
+    quill.on('text-change', alignInitialProjection);
     editorContainer.addEventListener('click', e => {
       if (e.target === editorContainer || e.target === endLineMarker) {
         quill.focus();
@@ -396,7 +396,7 @@
 
       amIMaster = (data.master_client_id === socket.id);
       currentMasterClientId = data.master_client_id;
-      document.querySelectorAll('#themeSelect, #fontSizeInput, #scaleInput, #padXInput, #padYInput, .btn-step').forEach(control => {
+      document.querySelectorAll('#themeSelect, #fontSizeInput, #scaleInput, #lineHeightInput, #padXInput, #padYInput, .btn-step').forEach(control => {
         control.disabled = !amIMaster;
         control.title = amIMaster ? '' : '共筆版面跟隨主控；接管主投影後可調整';
       });
@@ -405,6 +405,7 @@
         document.getElementById('onlineDot').style.background = '#eab308';
         document.getElementById('onlineCountText').innerHTML = `👤 僅您在線`;
       } else {
+          alignInitialProjection();
         document.getElementById('onlineDot').style.background = '#22c55e';
         document.getElementById('onlineCountText').innerHTML = `👥 協作在線：<strong style="color:#4ade80;">${totalEditors}</strong> 人`;
       }
@@ -427,28 +428,15 @@
       projectionTimer = setTimeout(() => {
         projectionTimer = null;
         if (!amIMaster || !socket.connected) return;
-        const top = editorContainer.getBoundingClientRect().top - document.getElementById('editor').getBoundingClientRect().top;
-        let low = 0, high = Math.max(0, quill.getLength() - 1);
-        while (low < high) {
-          const mid = Math.ceil((low + high) / 2);
-          if (quill.getBounds(mid).top <= top + 1) low = mid;
-          else high = mid - 1;
-        }
-        // Select the beginning of the first visible line, even on narrower phones.
-        const lineTop = quill.getBounds(low).top;
-        high = low; low = 0;
-        while (low < high) {
-          const mid = Math.floor((low + high) / 2);
-          if (quill.getBounds(mid).top < lineTop - 1) low = mid + 1;
-          else high = mid;
-        }
-        socket.emit('projection_scroll', { index: low,
-          bottom: editorContainer.scrollHeight - editorContainer.scrollTop - editorContainer.clientHeight < 40 });
-      }, 100);
+        socket.emit('projection_scroll', captureProjection(quill, editorContainer, collaboration));
+      }, 16);
     }
+    socket.on('request_projection_master', scheduleProjection);
     editorContainer.addEventListener('scroll', scheduleProjection, { passive: true });
     quill.on('text-change', scheduleProjection);
     window.addEventListener('resize', scheduleProjection);
+    window.visualViewport?.addEventListener('resize', scheduleProjection);
+    new ResizeObserver(scheduleProjection).observe(editorContainer);
     document.fonts.ready.then(scheduleProjection);
 
     function applyLocalStyle() {

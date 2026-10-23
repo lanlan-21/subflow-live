@@ -35,7 +35,7 @@ try{
   await v.waitForFunction(t=>document.querySelector('.remote-ime-preview')?.dataset.preview===t,text);
   // Force the master to its projection bottom, as in a live transcription session.
   await a.evaluate(()=>{const el=document.getElementById('editorContainer');el.scrollTop=el.scrollHeight;});
-  await v.waitForFunction(()=>{const el=document.getElementById('viewerContainer');return el.scrollTop>100&&el.scrollHeight-el.scrollTop-el.clientHeight<3;});
+  await v.waitForFunction(()=>{const el=document.getElementById('viewerContainer');const preview=document.querySelector('.remote-ime-preview');const tail=preview?.getClientRects();return tail?.length&&tail[tail.length-1].bottom>el.getBoundingClientRect().top&&tail[tail.length-1].bottom<=el.getBoundingClientRect().bottom;});
   assert(text.length>160);
  });
  await check('manual audience scroll pauses following while preedit keeps updating',async()=>{
