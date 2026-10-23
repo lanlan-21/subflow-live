@@ -1,0 +1,9 @@
+/* 教育部標準楷書 5.1 — 中華民國教育部；CC BY-ND 3.0 TW.
+   Original, unmodified font: https://language.moe.gov.tw/material/info?m=9fe3fe82-8bbf-44c0-961d-873ea079e284 */
+@font-face {
+  font-family: "TW-Kai";
+  src: url("/static/moe-kai.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

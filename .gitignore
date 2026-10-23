@@ -1,0 +1,6 @@
+.venv/
+node_modules/
+__pycache__/
+data/
+*.sqlite3*
+test-results/

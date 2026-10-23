@@ -1,0 +1,24 @@
+{
+  "name": "subflow-live",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node tests/browser.mjs"
+  },
+  "dependencies": {
+    "yjs": "13.6.27",
+    "y-quill": "1.0.0",
+    "y-indexeddb": "9.0.12",
+    "y-protocols": "1.0.6",
+    "lib0": "0.2.114",
+    "quill": "2.0.3",
+    "quill-cursors": "4.0.4",
+    "socket.io-client": "4.8.1",
+    "qrcodejs": "1.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "playwright": "1.62.1"
+  }
+}
