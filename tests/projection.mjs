@@ -102,8 +102,11 @@ try {
     const script='共同稿件與標楷字型對齊。'.repeat(800);await source.evaluate(t=>quill.insertText(0,t,'user'),script);await source.evaluate(()=>document.fonts.ready);
     await move(source,4000);
     const cold=await browser.newContext({viewport:{width:1100,height:750}});
-    await cold.route('**/moe-kai.ttf',async route=>{await new Promise(r=>setTimeout(r,600));await route.continue();});
-    const peer=await cold.newPage();await peer.goto(base+'/edit/FONT-JOIN');await peer.waitForFunction(()=>initialViewportApplied);
+    let releaseFont;const heldFont=new Promise(resolve=>{releaseFont=resolve;});
+    await cold.route('**/moe-kai.ttf',async route=>{await heldFont;await route.continue();});
+    const peer=await cold.newPage();await peer.goto(base+'/edit/FONT-JOIN',{waitUntil:'domcontentloaded'});await peer.waitForFunction(()=>initialProjection!=null);
+    assert.equal(await peer.evaluate(()=>initialViewportApplied),false,'do not consume initial alignment while font is still unavailable');
+    releaseFont();await peer.waitForFunction(()=>initialViewportApplied);
     await peer.waitForFunction(()=>{if(!initialProjection)return false;const i=collaboration.resolveProjectionAnchor(initialProjection.anchor);if(i==null)return false;const c=document.getElementById('editorContainer');const y=quill.container.getBoundingClientRect().top-c.getBoundingClientRect().top+quill.getBounds(i).top;return Math.abs(y-initialProjection.viewport_y*c.clientHeight)<3;});
     assert(await peer.evaluate(()=>document.fonts.check('48px "TW-Kai"','共筆')));await cold.close();await source.close();
   });

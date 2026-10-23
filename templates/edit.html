@@ -306,7 +306,8 @@
         initialViewportApplied = applyProjection(quill, editorContainer, initialProjection, collaboration);
       });
     }
-    document.fonts.ready.then(() => { initialFontsReady = true; alignInitialProjection(); });
+    document.fonts.load('48px "TW-Kai"', '聽打稿').catch(() => {}).then(() => document.fonts.ready)
+      .then(() => { initialFontsReady = true; alignInitialProjection(); });
     function updateWordCountThrottled() {
       clearTimeout(wordCountTimer);
       wordCountTimer = setTimeout(() => { wordCount.textContent = Math.max(0, quill.getLength() - 1); }, 200);
