@@ -296,15 +296,17 @@
     let currentMasterClientId = null;
     let initialViewportApplied = false;
     let initialProjection = null;
+    let initialFontsReady = false;
     let viewportTouched = false;
     for (const event of ['wheel', 'pointerdown', 'keydown']) editorContainer.addEventListener(event, () => { viewportTouched = true; }, { passive: true });
     let wordCountTimer;
     function alignInitialProjection() {
       requestAnimationFrame(() => {
-        if (!initialProjection || initialViewportApplied || amIMaster || viewportTouched || quill.hasFocus()) return;
+        if (!initialProjection || !initialFontsReady || initialViewportApplied || amIMaster || viewportTouched || quill.hasFocus()) return;
         initialViewportApplied = applyProjection(quill, editorContainer, initialProjection, collaboration);
       });
     }
+    document.fonts.ready.then(() => { initialFontsReady = true; alignInitialProjection(); });
     function updateWordCountThrottled() {
       clearTimeout(wordCountTimer);
       wordCountTimer = setTimeout(() => { wordCount.textContent = Math.max(0, quill.getLength() - 1); }, 200);
